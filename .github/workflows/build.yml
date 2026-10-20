@@ -1,0 +1,132 @@
+name: Build and release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tests and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race ./... -timeout 90s
+      - run: go vet ./...
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            extension: ''
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            extension: ''
+          - runner: macos-latest
+            goos: darwin
+            goarch: amd64
+            extension: ''
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+            extension: ''
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+            extension: .exe
+          - runner: windows-latest
+            goos: windows
+            goarch: arm64
+            extension: .exe
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Determine version
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="$(git describe --tags --always --dirty)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build binary and checksum
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          VERSION: ${{ steps.version.outputs.version }}
+          BINARY: hanoi-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.extension }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "dist/$BINARY" .
+          if [ "$(go env GOHOSTOS)" = "$GOOS" ] && [ "$(go env GOHOSTARCH)" = "$GOARCH" ]; then
+            actual="$("./dist/$BINARY" -version)"
+            test "$actual" = "hanoi $VERSION"
+          fi
+          python - "$BINARY" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          binary = pathlib.Path("dist") / sys.argv[1]
+          checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
+          pathlib.Path(str(binary) + ".sha256").write_text(
+              f"{checksum}  {binary.name}\n", encoding="utf-8"
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hanoi-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish tagged release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hanoi-*
+          path: dist
+          merge-multiple: true
+      - name: Create release and upload binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --generate-notes --title "$TAG"
+          fi
