@@ -9,6 +9,7 @@ Basic AI harness in Go.
 - conversation memory with `-memory`
 - config via `.env`
 - provider override via `OPENAI_BASE_URL`
+- multiple OpenAI-compatible providers in `hanoi.json[c]`, with CLI and TUI model selection
 - works as a simple OpenAI-compatible harness
 - includes OpenAI-style tool calling with a local `bash` tool
 - optional API logging with `-log <file>`
@@ -63,7 +64,8 @@ Inside TUI:
 - `/exit` or `/quit` ends the session
 - `/clear` resets the current conversation
 - `/save` writes memory to disk
-- `/model <name>` switches model
+- `/model <provider/model>` switches provider and model (`/model <name>` switches within the active provider)
+- `/providers`, `/models`, or `/model` opens the provider/model picker
 - `/system <text>` sets the system prompt
 - `/mcps` opens MCP server management
 - `/help` shows commands
@@ -121,8 +123,8 @@ Hanoi reads the `mcp` section of a config following
 workspace for `hanoi.json`, `hanoi.jsonc`, `opencode.json`, then `opencode.jsonc`
 and uses the first file found. JSONC comments and trailing commas are supported.
 You can select a file explicitly with `-config path/to/config.json`.
-Other OpenCode settings in that file are ignored; model/API settings still come
-from `.env` or environment variables.
+The same file can configure `provider` and `model` as described below.
+Other OpenCode settings are ignored.
 
 Start by copying `hanoi.json.example` to `hanoi.json`. Its example servers are
 disabled initially and can be enabled through `/mcps` after configuration.
@@ -295,17 +297,78 @@ conversation history, and tool output are included and can contain sensitive dat
 New log files are created with owner-only read/write permissions (`0600`).
 Logging is disabled unless `-log` is supplied.
 
-## Provider examples
+## Providers
 
-OpenAI-compatible backends can be used by overriding `OPENAI_BASE_URL`.
+Configure multiple providers using the
+[OpenCode custom-provider format](https://opencode.ai/docs/providers/#custom-provider).
+Providers share the same JSON/JSONC file as MCP servers (`-config` also applies to
+providers). For example:
 
-Example pattern:
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-4o-mini",
+  "provider": {
+    "openai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenAI",
+      "options": {
+        "baseURL": "https://api.openai.com/v1",
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      "models": {
+        "gpt-4o-mini": { "name": "GPT-4o mini" }
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local)",
+      "options": { "baseURL": "http://localhost:11434/v1" },
+      "models": {
+        "qwen3-coder": { "name": "Qwen3 Coder" }
+      }
+    }
+  }
+}
+```
+
+`model` selects the startup provider/model. Override it for a single run:
 
 ```bash
-OPENAI_API_KEY=...
-OPENAI_MODEL=...
-OPENAI_BASE_URL=...
-go run . "Hello"
+go run . -model ollama/qwen3-coder "Hello"
+go run . -tui -config hanoi.json
+```
+
+In the TUI, `/providers` or `/models` opens a sorted list with provider/model
+display names and the active selection. Use `↑`/`↓` and `Enter` to switch, or
+`Esc` to close. `/model ollama/qwen3-coder` switches directly. Switching applies
+to subsequent requests and keeps the conversation; edit `model` in the file to
+persist a default. If exactly one model is configured, it is selected automatically;
+otherwise `model` or `-model` is required.
+
+- Provider IDs are the keys of `provider`; model keys must match a configured model.
+  A model's optional `id` overrides the model ID sent to the API. Model IDs can
+  contain slashes, for example `gateway/vendor/model`.
+- `options.baseURL` is an API base URL; Hanoi appends `/chat/completions`.
+  A full Chat Completions endpoint is also accepted, including query parameters.
+  The `openai` provider defaults to `https://api.openai.com/v1`.
+- `options.apiKey` sets Bearer authentication. Omit it for unauthenticated local
+  servers. The `openai` provider falls back to `OPENAI_API_KEY` when omitted.
+- `options.headers` adds custom request headers and can override Authorization.
+  Keys and header values support `{env:VARIABLE}`, including `.env` variables.
+  Only the selected provider's variables are resolved, so an unused provider's
+  missing credentials do not prevent startup.
+- Hanoi uses OpenAI Chat Completions for all providers. `npm` may be omitted,
+  `@ai-sdk/openai-compatible`, or `@ai-sdk/openai`; it is a compatibility marker,
+  not an installed adapter. Native Anthropic, Bedrock, and other API protocols,
+  OpenCode's credential store, and provider OAuth are not supported.
+
+Without a `provider` section, the original `OPENAI_API_KEY`, `OPENAI_MODEL`, and
+`OPENAI_BASE_URL` settings still work. `OPENAI_BASE_URL` continues to mean the
+full endpoint URL in this mode. For example:
+
+```bash
+OPENAI_API_KEY=... OPENAI_MODEL=... OPENAI_BASE_URL=https://host/v1/chat/completions go run . "Hello"
 ```
 
 ## Tool calling

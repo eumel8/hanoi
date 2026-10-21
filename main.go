@@ -81,11 +81,15 @@ type streamResponse struct {
 }
 
 type config struct {
-	APIKey  string
-	Model   string
-	BaseURL string
-	Logger  *log.Logger
-	MCP     *mcpManager
+	APIKey    string
+	Model     string
+	BaseURL   string
+	Headers   map[string]string
+	Provider  string
+	ModelKey  string
+	Providers map[string]providerConfig
+	Logger    *log.Logger
+	MCP       *mcpManager
 }
 
 type chatResultMsg struct {
@@ -115,6 +119,8 @@ type tuiModel struct {
 	mcpBusy        bool
 	mcpCursor      int
 	mcpInfo        string
+	providersOpen  bool
+	providerCursor int
 }
 
 var (
@@ -140,7 +146,8 @@ func run() error {
 	memory := flag.String("memory", "", "conversation id to persist under .hanoi/")
 	tui := flag.Bool("tui", false, "interactive chat mode")
 	logPath := flag.String("log", "", "API log file (includes prompts and tool output)")
-	configPath := flag.String("config", "", "MCP config file (default: hanoi.json[c] or opencode.json[c])")
+	configPath := flag.String("config", "", "config file (default: hanoi.json[c] or opencode.json[c])")
+	model := flag.String("model", "", "model to use (provider/model or legacy model name)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -149,7 +156,7 @@ func run() error {
 		return nil
 	}
 
-	cfg, err := loadConfig()
+	cfg, err := loadConfig(*configPath, *model)
 	if err != nil {
 		return err
 	}
@@ -174,7 +181,7 @@ func run() error {
 	}
 
 	if flag.NArg() < 1 {
-		return fmt.Errorf("usage: %s [-stream] [-memory chat1] [-tui] [-log api.log] [-config hanoi.json] \"your prompt\"", os.Args[0])
+		return fmt.Errorf("usage: %s [-stream] [-memory chat1] [-tui] [-log api.log] [-config hanoi.json] [-model provider/model] \"your prompt\"", os.Args[0])
 	}
 
 	prompt := strings.Join(flag.Args(), " ")
@@ -270,6 +277,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mcpOpen {
 			return m.updateMCPMenu(msg)
 		}
+		if m.providersOpen {
+			return m.updateProviderMenu(msg)
+		}
 		if m.loading {
 			return m, nil
 		}
@@ -350,7 +360,7 @@ func (m tuiModel) View() string {
 	header := []string{
 		headStyle.Render("hanoi TUI"),
 		hintStyle.Render("Enter send · Alt+Enter newline · /help commands"),
-		hintStyle.Render("model: " + m.cfg.Model),
+		hintStyle.Render("model: " + m.cfg.modelReference()),
 	}
 	if m.memoryName != "" {
 		header = append(header, hintStyle.Render("memory: "+m.memoryName))
@@ -365,6 +375,9 @@ func (m tuiModel) View() string {
 	}
 	if m.mcpOpen {
 		body = m.mcpView()
+	}
+	if m.providersOpen {
+		body = m.providerView()
 	}
 
 	status := hintStyle.Render("ready")
@@ -442,18 +455,24 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "/model":
 		if arg == "" {
-			m.err = "usage: /model <name>"
-			return m, nil
+			m.providersOpen, m.err = true, ""
+		} else if cfg, err := m.cfg.selectModel(arg); err != nil {
+			m.err = err.Error()
+		} else {
+			m.cfg, m.err = cfg, ""
 		}
-		m.cfg.Model = arg
-		m.err = ""
+		m.textarea.SetValue("")
+		return m, nil
+	case "/providers", "/models":
+		m.providersOpen, m.err = true, ""
+		m.textarea.SetValue("")
 		return m, nil
 	case "/system":
 		m.system = arg
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "/clear /save /model <name> /system <text> /mcps /exit"
+		m.err = "/clear /save /model [provider/model] /providers /models /system <text> /mcps /exit"
 		return m, nil
 	case "/mcps":
 		m.textarea.SetValue("")
@@ -499,28 +518,6 @@ func streamChatCmd(cfg config, messages []message) tea.Cmd {
 	}
 }
 
-func loadConfig() (config, error) {
-	loadDotEnv(".env")
-
-	cfg := config{
-		APIKey:  os.Getenv("OPENAI_API_KEY"),
-		Model:   os.Getenv("OPENAI_MODEL"),
-		BaseURL: os.Getenv("OPENAI_BASE_URL"),
-	}
-
-	if cfg.APIKey == "" {
-		return config{}, fmt.Errorf("OPENAI_API_KEY is not set")
-	}
-	if cfg.Model == "" {
-		cfg.Model = "gpt-4o-mini"
-	}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://api.openai.com/v1/chat/completions"
-	}
-
-	return cfg, nil
-}
-
 // apiLogWriter quotes body chunks so multiline and streamed responses stay readable.
 type apiLogWriter struct {
 	logger *log.Logger
@@ -541,8 +538,13 @@ func sendChatRequest(cfg config, payload []byte) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	if cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
+	for name, value := range cfg.Headers {
+		req.Header.Set(name, value)
+	}
 	if cfg.Logger != nil {
 		cfg.Logger.Printf("request body=%s", payload)
 	}
