@@ -8,7 +8,7 @@ import (
 
 func (m tuiModel) providerView() string {
 	lines := []string{headStyle.Render("Providers and models"), "↑/↓ select · Enter activate · Esc close", ""}
-	choices := m.cfg.modelChoices()
+	choices := m.cfg.ModelChoices()
 	if len(choices) == 0 {
 		lines = append(lines, "No providers configured; using OPENAI_* environment settings.", "Add a provider section to hanoi.json to configure multiple providers.")
 	}
@@ -22,7 +22,7 @@ func (m tuiModel) providerView() string {
 		if model := provider.Models[modelID]; model.Name != "" {
 			row += " · " + model.Name
 		}
-		if choice == m.cfg.modelReference() {
+		if choice == m.cfg.ModelReference() {
 			row += " (active)"
 		}
 		prefix := "  "
@@ -35,7 +35,7 @@ func (m tuiModel) providerView() string {
 }
 
 func (m tuiModel) updateProviderMenu(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	choices := m.cfg.modelChoices()
+	choices := m.cfg.ModelChoices()
 	switch key.String() {
 	case "esc", "q":
 		m.providersOpen = false

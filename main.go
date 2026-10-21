@@ -80,18 +80,6 @@ type streamResponse struct {
 	} `json:"choices"`
 }
 
-type config struct {
-	APIKey    string
-	Model     string
-	BaseURL   string
-	Headers   map[string]string
-	Provider  string
-	ModelKey  string
-	Providers map[string]providerConfig
-	Logger    *log.Logger
-	MCP       *mcpManager
-}
-
 type chatResultMsg struct {
 	text string
 	err  error
@@ -360,7 +348,7 @@ func (m tuiModel) View() string {
 	header := []string{
 		headStyle.Render("hanoi TUI"),
 		hintStyle.Render("Enter send · Alt+Enter newline · /help commands"),
-		hintStyle.Render("model: " + m.cfg.modelReference()),
+		hintStyle.Render("model: " + m.cfg.ModelReference()),
 	}
 	if m.memoryName != "" {
 		header = append(header, hintStyle.Render("memory: "+m.memoryName))
@@ -795,31 +783,6 @@ func saveMemory(name string, messages []message) error {
 
 func memoryPath(name string) string {
 	return filepath.Join(".hanoi", name+".json")
-}
-
-func loadDotEnv(path string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
-		if os.Getenv(key) == "" {
-			_ = os.Setenv(key, value)
-		}
-	}
 }
 
 type bashToolArgs struct {

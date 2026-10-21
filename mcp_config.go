@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"time"
+
+	appconfig "hanoi/internal/config"
 
 	"github.com/tailscale/hujson"
 )
@@ -156,38 +157,6 @@ func loadMCPConfig(path string) (map[string]mcpServerConfig, error) {
 	return servers, nil
 }
 
-func findMCPConfig(explicit string) (string, error) {
-	if explicit != "" {
-		return explicit, nil
-	}
-	for _, path := range []string{"hanoi.json", "hanoi.jsonc", "opencode.json", "opencode.jsonc"} {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		} else if !os.IsNotExist(err) {
-			return "", err
-		}
-	}
-	return "", nil
-}
-
-var mcpEnvPattern = regexp.MustCompile(`\{env:([^}]+)\}`)
-
-func expandMCPEnv(value string) (string, error) {
-	var missing string
-	value = mcpEnvPattern.ReplaceAllStringFunc(value, func(match string) string {
-		name := mcpEnvPattern.FindStringSubmatch(match)[1]
-		value, ok := os.LookupEnv(name)
-		if !ok {
-			missing = name
-		}
-		return value
-	})
-	if missing != "" {
-		return "", fmt.Errorf("environment variable %s is not set", missing)
-	}
-	return value, nil
-}
-
 func expandMCPServer(entry mcpServerConfig) (mcpServerConfig, error) {
 	var err error
 	expand := func(value string) string {
@@ -195,7 +164,7 @@ func expandMCPServer(entry mcpServerConfig) (mcpServerConfig, error) {
 			return value
 		}
 		var out string
-		out, err = expandMCPEnv(value)
+		out, err = appconfig.ExpandEnv(value)
 		return out
 	}
 	entry.Command = append([]string{}, entry.Command...)

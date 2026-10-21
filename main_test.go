@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	appconfig "hanoi/internal/config"
 )
 
 func TestToolFollowupWithEmptyContent(t *testing.T) {
@@ -51,7 +53,7 @@ func TestToolFollowupWithEmptyContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	text, err := sendChat(config{APIKey: "test-key", Model: "test", BaseURL: server.URL}, []message{{Role: "user", Content: "run true"}}, false)
+	text, err := sendChat(config{Config: appconfig.Config{APIKey: "test-key", Model: "test", BaseURL: server.URL}}, []message{{Role: "user", Content: "run true"}}, false)
 	if err != nil || text != "done" || requests != 2 {
 		t.Fatalf("text=%q requests=%d err=%v", text, requests, err)
 	}
@@ -78,7 +80,7 @@ func TestAPILogging(t *testing.T) {
 			}))
 			defer server.Close()
 			var output bytes.Buffer
-			cfg := config{APIKey: "private-test-key", Model: "test", BaseURL: server.URL, Logger: log.New(&output, "", 0)}
+			cfg := config{Config: appconfig.Config{APIKey: "private-test-key", Model: "test", BaseURL: server.URL}, Logger: log.New(&output, "", 0)}
 			text, err := sendChat(cfg, []message{{Role: "user", Content: "test prompt"}}, tc.stream)
 			if tc.status == 400 {
 				if err == nil || !strings.Contains(err.Error(), "expected string content") {
@@ -173,7 +175,7 @@ func TestStreamingToolFollowup(t *testing.T) {
 
 			var chunks strings.Builder
 			messages := []message{{Role: "user", Content: "run tools"}}
-			text, err := sendStreamingChat(config{APIKey: "test", Model: "test", BaseURL: server.URL}, messages, func(piece string) {
+			text, err := sendStreamingChat(config{Config: appconfig.Config{APIKey: "test", Model: "test", BaseURL: server.URL}}, messages, func(piece string) {
 				chunks.WriteString(piece)
 			})
 			want := strings.Repeat("Checking.", rounds) + "hello"

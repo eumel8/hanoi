@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -11,12 +11,12 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-type providerModel struct {
+type Model struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-type providerConfig struct {
+type Provider struct {
 	Name    string `json:"name"`
 	NPM     string `json:"npm"`
 	Options struct {
@@ -24,41 +24,53 @@ type providerConfig struct {
 		APIKey  string            `json:"apiKey"`
 		Headers map[string]string `json:"headers"`
 	} `json:"options"`
-	Models map[string]providerModel `json:"models"`
+	Models map[string]Model `json:"models"`
 }
 
-func loadConfig(explicit, selection string) (config, error) {
+// Config contains model settings only; runtime services are owned by the application.
+type Config struct {
+	APIKey    string
+	Model     string
+	BaseURL   string
+	Headers   map[string]string
+	Provider  string
+	ModelKey  string
+	Providers map[string]Provider
+}
+
+// Load reads provider settings using the same config discovery as MCP.
+func Load(explicit, selection string) (Config, error) {
 	loadDotEnv(".env")
-	path, err := findMCPConfig(explicit)
+	path, err := FindFile(explicit)
 	if err != nil {
-		return config{}, err
+		return Config{}, err
 	}
 	var root struct {
-		Model     string                    `json:"model"`
-		Providers map[string]providerConfig `json:"provider"`
+		Model     string              `json:"model"`
+		Providers map[string]Provider `json:"provider"`
 	}
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return config{}, err
+			return Config{}, err
 		}
 		data, err = hujson.Standardize(data)
 		if err != nil {
-			return config{}, fmt.Errorf("parse %s: %w", path, err)
+			return Config{}, fmt.Errorf("parse %s: %w", path, err)
 		}
 		if err := json.Unmarshal(data, &root); err != nil {
-			return config{}, fmt.Errorf("config %s: %w", path, err)
+			return Config{}, fmt.Errorf("config %s: %w", path, err)
 		}
 	}
-	cfg := config{Providers: root.Providers}
+	cfg := Config{Providers: root.Providers}
 	if len(cfg.Providers) != 0 {
 		for id, provider := range cfg.Providers {
 			if strings.TrimSpace(id) == "" || strings.Contains(id, "/") {
-				return config{}, fmt.Errorf("provider ID must be nonempty and contain no slash")
+				return Config{}, fmt.Errorf("provider ID must be nonempty and contain no slash")
 			}
 			for model := range provider.Models {
 				if strings.TrimSpace(model) == "" {
-					return config{}, fmt.Errorf("provider %s: model ID is empty", id)
+					return Config{}, fmt.Errorf("provider %s: model ID is empty", id)
 				}
 			}
 		}
@@ -66,18 +78,18 @@ func loadConfig(explicit, selection string) (config, error) {
 			selection = root.Model
 		}
 		if selection == "" {
-			models := cfg.modelChoices()
+			models := cfg.ModelChoices()
 			if len(models) != 1 {
-				return config{}, fmt.Errorf("set model to provider/model in the config or use -model provider/model")
+				return Config{}, fmt.Errorf("set model to provider/model in the config or use -model provider/model")
 			}
 			selection = models[0]
 		}
-		return cfg.selectModel(selection)
+		return cfg.SelectModel(selection)
 	}
 	// Preserve the original environment-only configuration and full endpoint URL.
 	cfg.APIKey, cfg.Model, cfg.BaseURL = os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), os.Getenv("OPENAI_BASE_URL")
 	if cfg.APIKey == "" {
-		return config{}, fmt.Errorf("OPENAI_API_KEY is not set")
+		return Config{}, fmt.Errorf("OPENAI_API_KEY is not set")
 	}
 	if selection != "" {
 		cfg.Model = selection
@@ -91,7 +103,8 @@ func loadConfig(explicit, selection string) (config, error) {
 	return cfg, nil
 }
 
-func (cfg config) selectModel(selection string) (config, error) {
+// SelectModel resolves a selection without mutating the original configuration.
+func (cfg Config) SelectModel(selection string) (Config, error) {
 	if len(cfg.Providers) == 0 {
 		cfg.Model = selection
 		return cfg, nil
@@ -117,7 +130,7 @@ func (cfg config) selectModel(selection string) (config, error) {
 	if provider.NPM != "" && provider.NPM != "@ai-sdk/openai-compatible" && provider.NPM != "@ai-sdk/openai" {
 		return cfg, fmt.Errorf("provider %s: unsupported adapter; use an OpenAI-compatible provider", providerID)
 	}
-	baseURL, err := expandMCPEnv(provider.Options.BaseURL)
+	baseURL, err := ExpandEnv(provider.Options.BaseURL)
 	if err != nil {
 		return cfg, fmt.Errorf("provider %s baseURL: %w", providerID, err)
 	}
@@ -128,7 +141,7 @@ func (cfg config) selectModel(selection string) (config, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("provider %s: %w", providerID, err)
 	}
-	key, err := expandMCPEnv(provider.Options.APIKey)
+	key, err := ExpandEnv(provider.Options.APIKey)
 	if err != nil {
 		return cfg, fmt.Errorf("provider %s apiKey: %w", providerID, err)
 	}
@@ -137,7 +150,7 @@ func (cfg config) selectModel(selection string) (config, error) {
 	}
 	headers := make(map[string]string, len(provider.Options.Headers))
 	for name, value := range provider.Options.Headers {
-		expanded, err := expandMCPEnv(value)
+		expanded, err := ExpandEnv(value)
 		if err != nil {
 			return cfg, fmt.Errorf("provider %s headers: %w", providerID, err)
 		}
@@ -165,14 +178,16 @@ func chatEndpoint(baseURL string) (string, error) {
 	return u.String(), nil
 }
 
-func (cfg config) modelReference() string {
+// ModelReference returns the configured provider/model alias for display.
+func (cfg Config) ModelReference() string {
 	if cfg.Provider != "" {
 		return cfg.Provider + "/" + cfg.ModelKey
 	}
 	return cfg.Model
 }
 
-func (cfg config) modelChoices() []string {
+// ModelChoices returns configured provider/model references in sorted order.
+func (cfg Config) ModelChoices() []string {
 	var choices []string
 	for provider, entry := range cfg.Providers {
 		for model := range entry.Models {

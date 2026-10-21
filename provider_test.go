@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,7 +58,7 @@ func TestProviderSelectionAndRequests(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.modelReference() != "second/vendor/alias" {
+			if cfg.ModelReference() != "second/vendor/alias" {
 				t.Fatal("lost model alias")
 			}
 			// Simulate switching away from a provider with credentials and custom headers.
@@ -170,6 +171,8 @@ func TestProviderMenu(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	logger, manager := log.New(io.Discard, "", 0), &mcpManager{}
+	cfg.Logger, cfg.MCP = logger, manager
 	m := tuiModel{cfg: cfg, textarea: textarea.New(), messages: []message{{Role: "user", Content: "keep me"}}}
 	updated, _ := m.handleSlashCommand("/providers")
 	m = updated.(tuiModel)
@@ -182,6 +185,9 @@ func TestProviderMenu(t *testing.T) {
 	m = updated.(tuiModel)
 	if m.providersOpen || m.cfg.Model != "b" || len(m.messages) != 1 {
 		t.Fatal("menu selection did not switch model or preserve conversation")
+	}
+	if m.cfg.Logger != logger || m.cfg.MCP != manager {
+		t.Fatal("model selection lost application runtime services")
 	}
 	updated, _ = m.handleSlashCommand("/model local/missing")
 	m = updated.(tuiModel)
