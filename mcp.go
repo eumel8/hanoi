@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	appconfig "hanoi/internal/config"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -75,7 +77,7 @@ func (m *mcpManager) names() []string {
 func (m *mcpManager) Reload() error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	path, err := findMCPConfig(m.explicitPath)
+	path, err := appconfig.FindFile(m.explicitPath)
 	if err != nil {
 		return err
 	}

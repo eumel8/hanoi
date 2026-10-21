@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	appconfig "hanoi/internal/config"
+
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"golang.org/x/oauth2"
@@ -69,7 +71,7 @@ func parseMCPOAuth(raw json.RawMessage) (*mcpOAuthConfig, error) {
 	}
 	var err error
 	for _, field := range []*string{&config.ClientID, &config.ClientSecret, &config.Scope, &config.RedirectURI, &config.MetadataURL} {
-		*field, err = expandMCPEnv(*field)
+		*field, err = appconfig.ExpandEnv(*field)
 		if err != nil {
 			return nil, err
 		}

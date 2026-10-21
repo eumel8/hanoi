@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	appconfig "hanoi/internal/config"
+
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -64,7 +66,7 @@ func TestMCPConfigFormats(t *testing.T) {
 	if servers["new"].Headers["Authorization"] != "Bearer {env:HANOI_MCP_TOKEN}" {
 		t.Fatal("expansion modified original config")
 	}
-	if _, err := expandMCPEnv("{env:HANOI_MISSING_MCP_TEST_ENV}"); err == nil {
+	if _, err := appconfig.ExpandEnv("{env:HANOI_MISSING_MCP_TEST_ENV}"); err == nil {
 		t.Fatal("expected missing env error")
 	}
 	for _, invalid := range []string{
@@ -211,7 +213,7 @@ func TestMCPChatIntegration(t *testing.T) {
 				}
 			}))
 			defer api.Close()
-			cfg := config{APIKey: "test", Model: "test", BaseURL: api.URL, MCP: manager}
+			cfg := config{Config: appconfig.Config{APIKey: "test", Model: "test", BaseURL: api.URL}, MCP: manager}
 			var text string
 			var err error
 			if stream {
