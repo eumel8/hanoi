@@ -78,6 +78,8 @@ Inside TUI:
 - `/mcps` opens MCP server management
 - `/help` shows commands
 
+<img src="example.png" alt="hanoi" />
+
 Build:
 
 ```bash
