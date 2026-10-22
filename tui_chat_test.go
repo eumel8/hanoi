@@ -61,7 +61,8 @@ func TestChatScrollDuringStreaming(t *testing.T) {
 	if lipgloss.Height(m.View()) > m.height {
 		t.Fatal("chat layout exceeds the terminal height")
 	}
-	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlDown})
 	if !m.viewport.AtBottom() {
 		t.Fatal("Ctrl+End must resume following")
 	}
