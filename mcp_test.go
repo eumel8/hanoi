@@ -355,6 +355,48 @@ func TestMCPTimeoutAndFailureIsolation(t *testing.T) {
 	}
 }
 
+func TestLargeMCPToolOutput(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("TMP", os.Getenv("TMPDIR"))
+	fixture := newMCPTestServer()
+	server := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return fixture }, nil))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeMCPTestConfig(t, path, mcpServerConfig{Type: "remote", URL: server.URL})
+	manager, err := newMCPManager(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	text := strings.Repeat("large MCP result\n", 4096)
+	args, _ := json.Marshal(map[string]string{"text": text})
+	call := toolCall{ID: "call_large_mcp", Type: "function"}
+	call.Function.Name, call.Function.Arguments = mcpToolName("test", "echo"), string(args)
+	results, err := executeToolCalls([]toolCall{call}, config{MCP: manager})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ToolCallID != call.ID || !strings.Contains(results[0].Content, "Tool output truncated") || len(results[0].Content) > maxToolOutputBytes+1024 {
+		t.Fatal("large MCP result was not bounded")
+	}
+	files, err := filepath.Glob(filepath.Join(toolResultsDir(), "result-*.txt"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected saved MCP result, got %v: %v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		StructuredContent map[string]string `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || result.StructuredContent["echo"] != text {
+		t.Fatalf("full structured MCP result was not preserved: %v", err)
+	}
+}
+
 func TestMCPProtocolNegotiation(t *testing.T) {
 	fixture := newMCPTestServer()
 	server := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return fixture }, &mcp.StreamableHTTPOptions{Stateless: true}))

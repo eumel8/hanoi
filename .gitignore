@@ -1,2 +1,3 @@
 hanoi
 *.log
+.hanoi/tool-results/

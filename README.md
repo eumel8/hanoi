@@ -60,7 +60,15 @@ Inside TUI:
 
 - `Enter` sends
 - `Alt+Enter` inserts a newline
+- `↑`/`↓` recalls earlier prompts and slash commands at the first/last input line;
+  `Alt+↑`/`Alt+↓` recalls them from anywhere, preserving the current draft
+  (session history, seeded from saved user messages when using `-memory`)
+- `PgUp`/`PgDown` or the mouse wheel scrolls the chat; `Ctrl+Home`/`Ctrl+End`
+  jumps to the beginning/end, with a scrollbar showing the current position
 - assistant responses stream live in the TUI
+- scrolling up pauses automatic following until you return to the bottom
+- Markdown headings, lists, tables, and syntax-highlighted code blocks render live,
+  with wrapping adjusted to the terminal width and colors for light or dark backgrounds
 - `/exit` or `/quit` ends the session
 - `/clear` resets the current conversation
 - `/save` writes memory to disk
@@ -379,6 +387,22 @@ Tool calling works in normal CLI mode, with `-stream`, and in the TUI. Streamed
 tool-call fragments are assembled before execution, including multiple calls in
 one response. The model's answer after tool execution appears in the chat;
 the raw tool results can be inspected in the follow-up request in the API log.
+
+Bash commands run in `/tmp/hanoi` by default (`os.TempDir()/hanoi` on other
+platforms or when `TMPDIR` is set). The directory is created with `0700`
+permissions. Configuration and conversation memory still use the launch directory.
+
+Bash commands have a 30-second timeout. On Linux and macOS, a timeout stops the
+whole command process group, including pipelines. The TUI status distinguishes
+waiting for the model, receiving a response, and running a tool. Tool start/end
+times are recorded with `-log`. The Bash tool description includes the working
+directory and saved-results directory for follow-up questions.
+
+Tool results larger than 32 KiB are saved in full under `/tmp/hanoi/tool-results/`
+with owner-only file permissions (`0600`). The model receives a limited preview,
+an explicit truncation notice, and the absolute file path so it can use `bash` to filter
+or aggregate the full result. This applies to both MCP and Bash tools. Saved
+results remain available after exit; remove them when no longer needed.
 
 Example prompt:
 
