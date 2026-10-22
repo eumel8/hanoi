@@ -29,31 +29,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            extension: ''
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: arm64
-            extension: ''
-          - runner: macos-latest
-            goos: darwin
-            goarch: amd64
-            extension: ''
-          - runner: macos-latest
-            goos: darwin
-            goarch: arm64
-            extension: ''
-          - runner: windows-latest
-            goos: windows
-            goarch: amd64
-            extension: .exe
-          - runner: windows-latest
-            goos: windows
-            goarch: arm64
-            extension: .exe
+        # Build every target only for tags and manually dispatched runs.
+        include: ${{ fromJSON(
+          (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+          && '[
+            {"runner":"ubuntu-latest","goos":"linux","goarch":"amd64","extension":""},
+            {"runner":"ubuntu-latest","goos":"linux","goarch":"arm64","extension":""},
+            {"runner":"macos-latest","goos":"darwin","goarch":"amd64","extension":""},
+            {"runner":"macos-latest","goos":"darwin","goarch":"arm64","extension":""},
+            {"runner":"windows-latest","goos":"windows","goarch":"amd64","extension":".exe"},
+            {"runner":"windows-latest","goos":"windows","goarch":"arm64","extension":".exe"}
+          ]'
+          || '[{"runner":"ubuntu-latest","goos":"linux","goarch":"amd64","extension":""}]'
+          ) }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
