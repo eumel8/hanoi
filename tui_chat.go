@@ -11,7 +11,7 @@ import (
 func (m tuiModel) chatHeader() []string {
 	header := []string{
 		headStyle.Render("hanoi TUI"),
-		hintStyle.Render("Enter send · ↑/↓ history · PgUp/PgDown scroll · /help"),
+		hintStyle.Render("Enter send · ↑/↓ history · Ctrl+↑↓ scroll · 2x Ctrl+↑↓ top/bottom · /help"),
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
 	}
 	if m.memoryName != "" {
@@ -33,7 +33,7 @@ func (m *tuiModel) resizeChat() {
 }
 
 func (m *tuiModel) refreshChat() {
-	follow := m.viewport.AtBottom() || m.viewport.TotalLineCount() == 0
+	follow := !m.userScrolled && (m.viewport.AtBottom() || m.viewport.TotalLineCount() == 0)
 	body := strings.Join(m.history, "\n\n")
 	if m.streaming != "" {
 		body += "\n\n" + botStyle.Render("assistant") + "\n" + m.streamRendered
@@ -63,18 +63,28 @@ func (m tuiModel) chatViewport() string {
 }
 
 func (m *tuiModel) scrollChat(key tea.KeyMsg) bool {
-	switch key.String() {
+	k := key.String()
+	switch k {
 	case "pgup":
 		m.viewport.PageUp()
 	case "pgdown":
 		m.viewport.PageDown()
-	case "ctrl+home":
-		m.viewport.GotoTop()
-	case "ctrl+end":
-		m.viewport.GotoBottom()
+	case "ctrl+up":
+		if m.lastScrollKey == "ctrl+up" {
+			m.viewport.GotoTop()
+		} else {
+			m.viewport.LineUp(3)
+		}
+	case "ctrl+down":
+		if m.lastScrollKey == "ctrl+down" {
+			m.viewport.GotoBottom()
+		} else {
+			m.viewport.LineDown(3)
+		}
 	default:
 		return false
 	}
+	m.lastScrollKey = k
 	return true
 }
 

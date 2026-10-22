@@ -114,6 +114,8 @@ type tuiModel struct {
 	loading        bool
 	activity       string
 	streaming      string
+	userScrolled   bool
+	lastScrollKey  string
 	streamRendered string
 	markdown       *glamour.TermRenderer
 	err            string
@@ -257,7 +259,7 @@ func runTUI(cfg config, memoryName string) error {
 	m.renderMarkdown("")
 	m.rebuildHistory()
 
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	streamProgram = p
 	_, err = p.Run()
 	return err
@@ -296,6 +298,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateProviderMenu(msg)
 		}
 		if m.scrollChat(msg) {
+			m.userScrolled = true
+			m.refreshChat()
 			return m, nil
 		}
 		if m.loading {
@@ -324,6 +328,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activity = "waiting for model..."
 			m.streaming = ""
 			m.err = ""
+			m.userScrolled = false
 			m.rebuildHistory()
 			m.viewport.GotoBottom()
 			return m, tea.Batch(m.spinner.Tick, streamChatCmd(m.cfg, m.pendingMessage))
@@ -359,13 +364,30 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if !m.mcpOpen && !m.providersOpen && !m.mcpBusy {
-			m.viewport, _ = m.viewport.Update(msg)
+			// Explicitly handle scroll wheel events for WSL/Touchpad compatibility.
+			switch tea.MouseMsg(msg).Button {
+			case tea.MouseButtonWheelUp:
+				m.userScrolled = true
+				m.viewport.LineUp(3)
+			case tea.MouseButtonWheelDown:
+				m.userScrolled = true
+				m.viewport.LineDown(3)
+			case tea.MouseButtonWheelLeft:
+				m.userScrolled = true
+				m.viewport.LineUp(3)
+			case tea.MouseButtonWheelRight:
+				m.userScrolled = true
+				m.viewport.LineDown(3)
+			default:
+				m.viewport, _ = m.viewport.Update(msg)
+			}
 		}
 		return m, nil
 
 	case chatResultMsg:
 		m.loading = false
 		m.renderPending = false
+		m.userScrolled = false
 		if msg.err != nil {
 			m.err = msg.err.Error()
 			m.streaming = ""
@@ -535,7 +557,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "/clear /save /model [provider/model] /providers /models /system <text> /mcps /exit"
+		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /exit\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · ↑/↓ (input history)"
 		return m, nil
 	case "/mcps":
 		m.textarea.SetValue("")
