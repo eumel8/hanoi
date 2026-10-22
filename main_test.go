@@ -186,6 +186,56 @@ func TestStreamingToolFollowup(t *testing.T) {
 	}
 }
 
+func TestStreamingToolCallType(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		types     []string
+		wantError bool
+	}{
+		{"type only in first chunk", []string{"function", "", ""}, false},
+		{"repeated type", []string{"function", "function", "function"}, false},
+		{"conflicting type", []string{"function", "custom", "function"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stream bytes.Buffer
+			for index, args := range []string{"", "{", "}"} {
+				call := map[string]any{
+					"index":    0,
+					"function": map[string]any{"arguments": args},
+				}
+				if index == 0 {
+					call["id"] = "call_test"
+					call["function"] = map[string]any{"name": "test", "arguments": args}
+				}
+				if tc.types[index] != "" {
+					call["type"] = tc.types[index]
+				}
+				writeStreamChoice(&stream, map[string]any{"tool_calls": []any{call}}, nil)
+			}
+			writeStreamChoice(&stream, map[string]any{}, "tool_calls")
+			io.WriteString(&stream, "data: [DONE]\n\n")
+
+			msg, err := handleStream(&stream, nil)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "conflicting streamed tool call type at index 0") {
+					t.Fatalf("expected conflicting type error, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.ToolCalls) != 1 {
+				t.Fatalf("expected one tool call, got %#v", msg.ToolCalls)
+			}
+			call := msg.ToolCalls[0]
+			if call.ID != "call_test" || call.Type != "function" || call.Function.Name != "test" || call.Function.Arguments != "{}" {
+				t.Fatalf("invalid assembled tool call: %#v", call)
+			}
+		})
+	}
+}
+
 func TestIncompleteStreamingToolCalls(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

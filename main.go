@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,10 +15,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -89,17 +93,29 @@ type chatChunkMsg struct {
 	text string
 }
 
+type streamRenderMsg struct{}
+
+type chatStatusMsg string
+
 type tuiModel struct {
 	cfg            config
 	memoryName     string
 	messages       []message
 	history        []string
 	textarea       textarea.Model
+	viewport       viewport.Model
+	inputHistory   []string
+	historyIndex   int
+	historyDraft   string
+	renderPending  bool
 	spinner        spinner.Model
 	width          int
 	height         int
 	loading        bool
+	activity       string
 	streaming      string
+	streamRendered string
+	markdown       *glamour.TermRenderer
 	err            string
 	system         string
 	pendingMessage []message
@@ -227,12 +243,21 @@ func runTUI(cfg config, memoryName string) error {
 		memoryName: memoryName,
 		messages:   messages,
 		textarea:   ta,
+		viewport:   viewport.New(70, 10),
 		spinner:    sp,
 		system:     "",
 	}
+	for _, msg := range messages {
+		if msg.Role == "user" {
+			m.rememberInput(msg.Content)
+		}
+	}
+	// Detect the terminal background before Bubble Tea takes over terminal input.
+	m.resizeChat()
+	m.renderMarkdown("")
 	m.rebuildHistory()
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	streamProgram = p
 	_, err = p.Run()
 	return err
@@ -247,7 +272,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.textarea.SetWidth(max(20, msg.Width-8))
+		m.resizeChat()
+		m.markdown = nil
+		m.rebuildHistory()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -268,16 +295,24 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.providersOpen {
 			return m.updateProviderMenu(msg)
 		}
+		if m.scrollChat(msg) {
+			return m, nil
+		}
 		if m.loading {
 			return m, nil
 		}
 
 		switch msg.String() {
+		case "up", "down", "alt+up", "alt+down":
+			if m.recallInput(msg.String()) {
+				return m, nil
+			}
 		case "enter":
 			prompt := strings.TrimSpace(m.textarea.Value())
 			if prompt == "" {
 				return m, nil
 			}
+			m.rememberInput(prompt)
 			if strings.HasPrefix(prompt, "/") {
 				return m.handleSlashCommand(prompt)
 			}
@@ -286,9 +321,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append([]message{}, m.pendingMessage...)
 			m.textarea.SetValue("")
 			m.loading = true
+			m.activity = "waiting for model..."
 			m.streaming = ""
 			m.err = ""
 			m.rebuildHistory()
+			m.viewport.GotoBottom()
 			return m, tea.Batch(m.spinner.Tick, streamChatCmd(m.cfg, m.pendingMessage))
 		case "alt+enter":
 			m.textarea.InsertRune('\n')
@@ -301,11 +338,34 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatChunkMsg:
 		m.streaming += msg.text
-		m.rebuildHistory()
+		if !m.renderPending {
+			m.renderPending = true
+			return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return streamRenderMsg{} })
+		}
+		return m, nil
+
+	case chatStatusMsg:
+		m.activity = string(msg)
+		return m, nil
+
+	case streamRenderMsg:
+		m.renderPending = false
+		if m.streaming == "" {
+			return m, nil
+		}
+		m.streamRendered = m.renderMarkdown(m.streaming)
+		m.refreshChat()
+		return m, nil
+
+	case tea.MouseMsg:
+		if !m.mcpOpen && !m.providersOpen && !m.mcpBusy {
+			m.viewport, _ = m.viewport.Update(msg)
+		}
 		return m, nil
 
 	case chatResultMsg:
 		m.loading = false
+		m.renderPending = false
 		if msg.err != nil {
 			m.err = msg.err.Error()
 			m.streaming = ""
@@ -345,22 +405,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) View() string {
-	header := []string{
-		headStyle.Render("hanoi TUI"),
-		hintStyle.Render("Enter send · Alt+Enter newline · /help commands"),
-		hintStyle.Render("model: " + m.cfg.ModelReference()),
-	}
-	if m.memoryName != "" {
-		header = append(header, hintStyle.Render("memory: "+m.memoryName))
-	}
-	if m.system != "" {
-		header = append(header, hintStyle.Render("system: "+m.system))
-	}
-
-	body := strings.Join(m.history, "\n\n")
-	if body == "" {
-		body = hintStyle.Render("No messages yet.")
-	}
+	header := m.chatHeader()
+	body := m.chatViewport()
 	if m.mcpOpen {
 		body = m.mcpView()
 	}
@@ -370,7 +416,11 @@ func (m tuiModel) View() string {
 
 	status := hintStyle.Render("ready")
 	if m.loading {
-		status = m.spinner.View() + " streaming..."
+		activity := m.activity
+		if activity == "" {
+			activity = "waiting for model..."
+		}
+		status = m.spinner.View() + " " + activity
 	}
 	if m.mcpBusy {
 		status = m.spinner.View() + " updating MCP servers..."
@@ -392,20 +442,45 @@ func (m tuiModel) View() string {
 }
 
 func (m *tuiModel) rebuildHistory() {
+	m.resizeChat()
 	m.history = nil
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
 			m.history = append(m.history, userStyle.Render("you")+": "+msg.Content)
 		case "assistant":
-			m.history = append(m.history, botStyle.Render("assistant")+": "+msg.Content)
+			m.history = append(m.history, botStyle.Render("assistant")+"\n"+m.renderMarkdown(msg.Content))
 		case "system":
 			m.history = append(m.history, hintStyle.Render("system: "+msg.Content))
 		}
 	}
 	if m.streaming != "" {
-		m.history = append(m.history, botStyle.Render("assistant")+": "+m.streaming)
+		m.streamRendered = m.renderMarkdown(m.streaming)
 	}
+	m.refreshChat()
+}
+
+func (m *tuiModel) renderMarkdown(text string) string {
+	if m.markdown == nil {
+		style := "light"
+		if lipgloss.HasDarkBackground() {
+			style = "dark"
+		}
+		width := max(1, m.viewport.Width)
+		renderer, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle(style),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			return text
+		}
+		m.markdown = renderer
+	}
+	rendered, err := m.markdown.Render(text)
+	if err != nil {
+		return text
+	}
+	return strings.Trim(rendered, "\n")
 }
 
 func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
@@ -497,6 +572,11 @@ func appendMessage(messages []message, system string, user message) []message {
 
 func streamChatCmd(cfg config, messages []message) tea.Cmd {
 	return func() tea.Msg {
+		cfg.OnStatus = func(status string) {
+			if streamProgram != nil {
+				streamProgram.Send(chatStatusMsg(status))
+			}
+		}
 		text, err := sendStreamingChat(cfg, messages, func(piece string) {
 			if streamProgram != nil {
 				streamProgram.Send(chatChunkMsg{text: piece})
@@ -522,6 +602,7 @@ type loggedResponseBody struct {
 }
 
 func sendChatRequest(cfg config, payload []byte) (*http.Response, error) {
+	cfg.reportStatus("waiting for model...")
 	req, err := http.NewRequest(http.MethodPost, cfg.BaseURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -551,6 +632,7 @@ func sendChatRequest(cfg config, payload []byte) (*http.Response, error) {
 			Closer: resp.Body,
 		}
 	}
+	cfg.reportStatus("receiving model response...")
 	return resp, nil
 }
 
@@ -737,7 +819,12 @@ func handleStream(body io.Reader, onChunk func(string)) (message, error) {
 					calls[*delta.Index] = call
 				}
 				call.ID += delta.ID
-				call.Type += delta.Type
+				if delta.Type != "" {
+					if call.Type != "" && call.Type != delta.Type {
+						return message{}, fmt.Errorf("conflicting streamed tool call type at index %d", *delta.Index)
+					}
+					call.Type = delta.Type
+				}
 				call.Function.Name += delta.Function.Name
 				call.Function.Arguments += delta.Function.Arguments
 			}
@@ -795,7 +882,7 @@ func availableTools(cfg config) []tool {
 			Type: "function",
 			Function: toolFunction{
 				Name:        "bash",
-				Description: "Run a local bash command and return stdout and stderr.",
+				Description: fmt.Sprintf("Run a local bash command and return stdout and stderr. Commands time out after 30 seconds. Working directory: %q. Saved tool results are in %q; check that directory directly, never search the entire filesystem. For MCP JSON files, parse content[0].text as JSON. Reuse saved results for follow-up questions.", toolWorkDir(), toolResultsDir()),
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -822,14 +909,26 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 
 		var output string
 		var err error
+		cfg.reportStatus("running tool: " + call.Function.Name)
+		started := time.Now()
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("tool name=%q started", call.Function.Name)
+		}
 		switch call.Function.Name {
 		case "bash":
 			output, err = runBashTool(call.Function.Arguments)
 		default:
 			output, err = cfg.MCP.Call(call.Function.Name, call.Function.Arguments)
 		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("tool name=%q finished duration=%s failed=%t", call.Function.Name, time.Since(started), err != nil)
+		}
 		if err != nil {
 			output = err.Error() + "\n" + output
+		}
+		output, err = prepareToolOutput(output)
+		if err != nil {
+			return nil, fmt.Errorf("prepare tool result for %s: %w", call.Function.Name, err)
 		}
 		toolMessages = append(toolMessages, message{
 			Role: "tool", Name: call.Function.Name, ToolCallID: call.ID, Content: output,
@@ -839,6 +938,12 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 }
 
 func runBashTool(rawArgs string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return runBashToolContext(ctx, rawArgs)
+}
+
+func runBashToolContext(ctx context.Context, rawArgs string) (string, error) {
 	var args bashToolArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return "", fmt.Errorf("decode bash arguments: %w", err)
@@ -847,18 +952,18 @@ func runBashTool(rawArgs string) (string, error) {
 		return "", fmt.Errorf("bash command is empty")
 	}
 
-	cmd := exec.Command("bash", "-lc", args.Command)
-	cmd.Dir = mustGetwd()
-	output, err := cmd.CombinedOutput()
-	return string(output), err
-}
-
-func mustGetwd() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
+	if err := os.MkdirAll(toolWorkDir(), 0o700); err != nil {
+		return "", fmt.Errorf("create tool working directory: %w", err)
 	}
-	return wd
+	cmd := exec.CommandContext(ctx, "bash", "-lc", args.Command)
+	configureBashProcess(cmd)
+	cmd.WaitDelay = time.Second
+	cmd.Dir = toolWorkDir()
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return string(output), fmt.Errorf("bash command stopped: %w; use a narrower command or search only the saved tool-results directory", ctx.Err())
+	}
+	return string(output), err
 }
 
 func max(a, b int) int {
