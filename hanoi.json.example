@@ -2,6 +2,16 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "openai/gpt-4o-mini",
   "provider": {
+    "anthropic": {
+      "options": {
+        "apiKey": "{env:ANTHROPIC_API_KEY}",
+        "baseURL": "https://api.anthropic.com/v1",
+        "timeout": 300000
+      },
+      "models": {
+        "claude-sonnet-4-6": {}
+      }
+    },
     "openai": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "OpenAI",
