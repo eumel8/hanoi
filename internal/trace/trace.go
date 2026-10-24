@@ -1,4 +1,5 @@
-package main
+// Package trace records provider-independent execution lifecycle events as JSONL.
+package trace
 
 import (
 	"crypto/rand"
@@ -11,7 +12,7 @@ import (
 )
 
 // Trace records lifecycle metadata, not API payloads or complete tool output.
-type traceEvent struct {
+type Event struct {
 	Sequence    int64     `json:"sequence"`
 	Time        time.Time `json:"time"`
 	RunID       string    `json:"run_id"`
@@ -31,7 +32,7 @@ type traceEvent struct {
 	Error       string    `json:"error,omitempty"`
 }
 
-type traceRecorder struct {
+type Recorder struct {
 	mu       sync.Mutex
 	writer   io.Writer
 	sequence int64
@@ -39,54 +40,56 @@ type traceRecorder struct {
 	err      error
 }
 
-type traceRun struct {
-	recorder *traceRecorder
+type Run struct {
+	recorder *Recorder
 	id       string
 	turn     int
+	model    string
+	onEvent  func(Event)
 }
 
-func (cfg config) beginTrace(messages []message) (config, func(error) error) {
-	if cfg.traceRun != nil || cfg.Trace == nil {
-		return cfg, func(err error) error { return err }
+// New creates a recorder. A nil writer enables callback-only recording.
+func New(writer io.Writer) *Recorder {
+	return &Recorder{writer: writer}
+}
+
+// Begin starts a turn. Its finish function must be called with the turn outcome.
+// A nil recorder disables tracing.
+func (recorder *Recorder) Begin(model, text string, onEvent func(Event)) (*Run, func(error) error) {
+	if recorder == nil {
+		return nil, func(err error) error { return err }
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return cfg, func(error) error { return fmt.Errorf("trace run ID: %w", err) }
+		return nil, func(error) error { return fmt.Errorf("trace run ID: %w", err) }
 	}
-	cfg.Trace.mu.Lock()
-	cfg.Trace.turn++
-	cfg.traceRun = &traceRun{recorder: cfg.Trace, id: hex.EncodeToString(id[:]), turn: cfg.Trace.turn}
-	cfg.Trace.mu.Unlock()
-	text := ""
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			text = messages[i].Content
-			break
-		}
-	}
+	recorder.mu.Lock()
+	recorder.turn++
+	run := &Run{recorder: recorder, id: hex.EncodeToString(id[:]), turn: recorder.turn, model: model, onEvent: onEvent}
+	recorder.mu.Unlock()
 	started := time.Now()
-	cfg.emitTrace(traceEvent{Type: "turn.started", Text: text})
-	return cfg, func(err error) error {
-		e := traceEvent{Type: "turn.completed", Status: "completed", DurationMS: traceDuration(started)}
+	run.Emit(Event{Type: "turn.started", Text: text})
+	return run, func(err error) error {
+		e := Event{Type: "turn.completed", Status: "completed", DurationMS: Duration(started)}
 		if err != nil {
 			e.Status, e.Error = "error", err.Error()
 		}
-		cfg.emitTrace(e)
-		cfg.Trace.mu.Lock()
-		defer cfg.Trace.mu.Unlock()
-		if cfg.Trace.err != nil && err == nil {
-			return fmt.Errorf("write trace: %w", cfg.Trace.err)
+		run.Emit(e)
+		recorder.mu.Lock()
+		defer recorder.mu.Unlock()
+		if recorder.err != nil && err == nil {
+			return fmt.Errorf("write trace: %w", recorder.err)
 		}
 		return err
 	}
 }
 
-func (cfg config) emitTrace(e traceEvent) {
-	if cfg.traceRun == nil {
+// Emit records an event in this turn. A nil run is a no-op.
+func (r *Run) Emit(e Event) {
+	if r == nil {
 		return
 	}
-	r := cfg.traceRun
-	e.Time, e.RunID, e.Turn, e.Model = time.Now().UTC(), r.id, r.turn, cfg.ModelReference()
+	e.Time, e.RunID, e.Turn, e.Model = time.Now().UTC(), r.id, r.turn, r.model
 	r.recorder.mu.Lock()
 	r.recorder.sequence++
 	e.Sequence = r.recorder.sequence
@@ -94,11 +97,12 @@ func (cfg config) emitTrace(e traceEvent) {
 		r.recorder.err = json.NewEncoder(r.recorder.writer).Encode(e)
 	}
 	r.recorder.mu.Unlock()
-	if cfg.OnTrace != nil {
-		cfg.OnTrace(e)
+	if r.onEvent != nil {
+		r.onEvent(e)
 	}
 }
 
-func traceDuration(start time.Time) float64 {
+// Duration returns elapsed milliseconds since start.
+func Duration(start time.Time) float64 {
 	return float64(time.Since(start).Microseconds()) / 1000
 }

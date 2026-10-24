@@ -1,12 +1,42 @@
-package main
+package app
 
 import (
+	"encoding/json"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
+
+// toolArgsSummary renders the key arguments of a tool call for status lines.
+func toolArgsSummary(call toolCall) string {
+	if call.Function.Name != "bash" {
+		if call.Function.Arguments == "" {
+			return "(no args)"
+		}
+		return "(" + clipArgs(call.Function.Arguments, 80) + ")"
+	}
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil || args.Command == "" {
+		return clipArgs(call.Function.Arguments, 100)
+	}
+	command := args.Command
+	if len(command) > 100 {
+		command = command[:100] + "…"
+	}
+	return clipArgs(command, 100)
+}
+
+func clipArgs(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > limit {
+		return s[:limit] + "…"
+	}
+	return s
+}
 
 func (m tuiModel) chatHeader() []string {
 	header := []string{

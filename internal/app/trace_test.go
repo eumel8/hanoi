@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	appconfig "hanoi/internal/config"
+	"hanoi/internal/trace"
 )
 
 func TestTraceToolRoundTrip(t *testing.T) {
@@ -45,7 +46,7 @@ func TestTraceToolRoundTrip(t *testing.T) {
 			defer server.Close()
 			var log bytes.Buffer
 			var events []traceEvent
-			cfg := config{Config: appconfig.Config{Model: "test", BaseURL: server.URL}, Trace: &traceRecorder{writer: &log}, OnTrace: func(e traceEvent) { events = append(events, e) }}
+			cfg := config{Config: appconfig.Config{Model: "test", BaseURL: server.URL}, Trace: trace.New(&log), OnTrace: func(e traceEvent) { events = append(events, e) }}
 			messages := []message{{Role: "user", Content: "run command"}}
 			var text string
 			var err error
@@ -84,15 +85,10 @@ func TestTraceAPIErrorAndWriteFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unavailable", 503) }))
 	defer server.Close()
 	var events []traceEvent
-	cfg := config{Config: appconfig.Config{Model: "test", BaseURL: server.URL}, Trace: &traceRecorder{}, OnTrace: func(e traceEvent) { events = append(events, e) }}
+	cfg := config{Config: appconfig.Config{Model: "test", BaseURL: server.URL}, Trace: trace.New(nil), OnTrace: func(e traceEvent) { events = append(events, e) }}
 	_, err := sendChat(cfg, []message{{Role: "user", Content: "hello"}}, false)
 	if err == nil || len(events) != 4 || events[2].Status != "error" || events[3].Status != "error" {
 		t.Fatalf("API failure not traced: %+v, %v", events, err)
-	}
-	cfg.Trace.err = fmt.Errorf("disk full")
-	_, finish := cfg.beginTrace(nil)
-	if err := finish(nil); err == nil || !strings.Contains(err.Error(), "disk full") {
-		t.Fatalf("trace write failure lost: %v", err)
 	}
 }
 

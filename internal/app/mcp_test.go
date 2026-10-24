@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	appconfig "hanoi/internal/config"
+	"hanoi/internal/tools"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -378,10 +379,10 @@ func TestLargeMCPToolOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].ToolCallID != call.ID || !strings.Contains(results[0].Content, "Tool output truncated") || len(results[0].Content) > maxToolOutputBytes+1024 {
+	if len(results) != 1 || results[0].ToolCallID != call.ID || !strings.Contains(results[0].Content, "Tool output truncated") || len(results[0].Content) > 32*1024+1024 {
 		t.Fatal("large MCP result was not bounded")
 	}
-	files, err := filepath.Glob(filepath.Join(toolResultsDir(), "result-*.txt"))
+	files, err := filepath.Glob(filepath.Join(tools.ResultsDir(), "result-*.txt"))
 	if err != nil || len(files) != 1 {
 		t.Fatalf("expected saved MCP result, got %v: %v", files, err)
 	}
