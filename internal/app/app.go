@@ -141,6 +141,9 @@ type tuiModel struct {
 	traceOpen      bool
 	traceEvents    []traceEvent
 	chatOffset     int
+	doctorOpen     bool
+	doctorBusy     bool
+	doctorText     string
 }
 
 var (
@@ -176,6 +179,7 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
+	cfg.LogPath, cfg.TracePath = *logPath, *tracePath
 
 	if *logPath != "" {
 		file, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -318,6 +322,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.providersOpen {
 			return m.updateProviderMenu(msg)
 		}
+		if m.doctorOpen {
+			if msg.String() == "esc" {
+				m.doctorOpen = false
+				m.resizeChat()
+				m.refreshChat()
+				m.viewport.SetYOffset(m.chatOffset)
+				m.userScrolled = !m.viewport.AtBottom()
+			} else if m.scrollChat(msg) {
+				m.userScrolled = true
+			}
+			return m, nil
+		}
 		if msg.String() == "ctrl+t" || (m.traceOpen && msg.String() == "esc") {
 			m.toggleTrace()
 			return m, nil
@@ -385,6 +401,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.traceOpen {
 			m.refreshChat()
+		}
+		return m, nil
+
+	case doctorResultMsg:
+		m.doctorBusy = false
+		m.doctorText = string(msg)
+		if m.doctorOpen {
+			m.refreshChat()
+			m.viewport.GotoTop()
 		}
 		return m, nil
 
@@ -484,7 +509,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	default:
 		var cmds []tea.Cmd
-		if m.loading || m.mcpBusy {
+		if m.loading || m.mcpBusy || m.doctorBusy {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -532,6 +557,9 @@ func (m tuiModel) View() string {
 	}
 	if m.mcpBusy {
 		status = m.spinner.View() + " updating MCP servers..."
+	}
+	if m.doctorBusy {
+		status = m.spinner.View() + " running diagnostics..."
 	}
 	if m.err != "" {
 		status = errStyle.Render(m.err)
@@ -643,8 +671,31 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /trace /exit\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /trace /doctor [provider] /exit\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
 		return m, nil
+	case "/doctor":
+		if arg != "" && arg != "provider" {
+			m.err = "usage: /doctor [provider]"
+			return m, nil
+		}
+		if m.doctorBusy {
+			m.err = "diagnostics already running"
+			return m, nil
+		}
+		if m.traceOpen {
+			m.toggleTrace()
+		}
+		m.chatOffset = m.viewport.YOffset
+		m.doctorOpen, m.doctorBusy, m.err = true, true, ""
+		m.doctorText = "Checking local runtime..."
+		if arg == "provider" {
+			m.doctorText += "\nTesting provider with a model request (20s timeout)..."
+		}
+		m.textarea.SetValue("")
+		m.resizeChat()
+		m.refreshChat()
+		m.viewport.GotoTop()
+		return m, tea.Batch(m.spinner.Tick, doctorCmd(m.cfg, arg == "provider"))
 	case "/trace":
 		m.textarea.SetValue("")
 		m.toggleTrace()

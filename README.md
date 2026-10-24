@@ -27,6 +27,7 @@ version.go           Build-time version (main.version)
 internal/
   app/               Application wiring, agent loop, API client, MCP and TUI
   config/            Provider settings and OpenCode-compatible config loading
+  doctor/            Local runtime and writable-storage checks
   tools/             Bash execution, process cancellation and tool-result storage
   trace/             Lifecycle events, run correlation and JSONL recording
 ```
@@ -97,9 +98,31 @@ Inside TUI:
 - `/mcps` opens MCP server management
 - `/trace` or `Ctrl+T` toggles the live trace timeline, including while a response is running;
   `Esc` returns to chat and restores its scroll position
+- `/doctor` checks the local runtime, storage, active model, configuration/log paths,
+  and the current MCP connection/tool catalog; `/doctor provider` also tests the model endpoint
 - `/help` shows commands
 
 <img src="example.png" alt="hanoi" />
+
+### Runtime diagnostics
+
+Use `/doctor` in the TUI for a scrollable report. It checks whether Bash is in
+`PATH`, verifies that the tool working directory and result storage are writable,
+and displays the selected provider/model, configuration file, API log and trace
+paths. Missing tool directories are created and temporary write probes are
+removed. MCP diagnostics use the current connection state and list available
+tool names; they do not reconnect servers or invoke tools.
+
+`/doctor provider` additionally sends one small, tool-free chat request to the
+active model, using the configured authentication and headers with a 20-second
+timeout. This is a real model request and may incur provider charges. Success
+requires a usable chat response, rather than just a reachable HTTP endpoint.
+Credentials, raw provider error bodies and OAuth login URLs are omitted from
+the report. Local-only `/doctor` makes no network requests.
+
+Results use `OK`, `FAIL`, `WARN`, `SKIP` and `INFO` labels. Scroll as in chat and
+press `Esc` to return. Diagnostic results do not enter the model conversation or
+saved chat memory.
 
 ### Hanoi Trace
 
