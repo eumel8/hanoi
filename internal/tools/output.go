@@ -1,50 +1,20 @@
-package main
+package tools
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"unicode/utf8"
 )
 
 const maxToolOutputBytes = 32 * 1024
 
-// toolArgsSummary renders the key arguments of a tool call for status lines.
-func toolArgsSummary(call toolCall) string {
-	if call.Function.Name != "bash" {
-		if call.Function.Arguments == "" {
-			return "(no args)"
-		}
-		return "(" + clipArgs(call.Function.Arguments, 80) + ")"
-	}
-	var args struct {
-		Command string `json:"command"`
-	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil || args.Command == "" {
-		return clipArgs(call.Function.Arguments, 100)
-	}
-	command := args.Command
-	if len(command) > 100 {
-		command = command[:100] + "…"
-	}
-	return clipArgs(command, 100)
-}
-
-func clipArgs(s string, limit int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > limit {
-		return s[:limit] + "…"
-	}
-	return s
-}
-
-func prepareToolOutput(output string) (string, error) {
+func PrepareOutput(output string) (string, error) {
 	if len(output) <= maxToolOutputBytes {
 		return output, nil
 	}
 
-	dir := toolResultsDir()
+	dir := ResultsDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create tool result storage: %w", err)
 	}

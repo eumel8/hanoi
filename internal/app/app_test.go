@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -151,7 +151,7 @@ func TestStreamingToolFollowup(t *testing.T) {
 					for _, part := range []int{0, 1} {
 						for _, index := range []int{1, 0} {
 							name := []string{"tool-zero", "tool-one"}[index]
-							args, _ := json.Marshal(bashToolArgs{Command: "printf " + name})
+							args, _ := json.Marshal(map[string]string{"command": "printf " + name})
 							mid := len(args) / 2
 							call := map[string]any{"index": index}
 							if part == 0 {

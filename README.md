@@ -17,6 +17,24 @@ Basic AI harness in Go.
 - MCP tools from local and remote servers, with OpenCode-compatible config and `/mcps` management
 - tag-based `-version` output and GitHub Actions builds for Linux, macOS, and Windows
 
+## Code structure
+
+Hanoi uses one Go module with focused internal packages:
+
+```text
+main.go              CLI entry point
+version.go           Build-time version (main.version)
+internal/
+  app/               Application wiring, agent loop, API client, MCP and TUI
+  config/            Provider settings and OpenCode-compatible config loading
+  tools/             Bash execution, process cancellation and tool-result storage
+  trace/             Lifecycle events, run correlation and JSONL recording
+```
+
+Tests live alongside the package they cover; end-to-end agent/tool and TUI tests
+are in `internal/app`. The tools and trace packages are independent of the TUI,
+provider configuration and MCP implementation.
+
 ## Setup
 
 Create a `.env` file:

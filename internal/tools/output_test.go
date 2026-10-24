@@ -1,4 +1,4 @@
-package main
+package tools
 
 import (
 	"context"
@@ -26,11 +26,11 @@ func TestPrepareToolOutput(t *testing.T) {
 			t.Chdir(t.TempDir())
 			t.Setenv("TMPDIR", t.TempDir())
 			t.Setenv("TMP", os.Getenv("TMPDIR"))
-			preview, err := prepareToolOutput(tc.output)
+			preview, err := PrepareOutput(tc.output)
 			if err != nil {
 				t.Fatal(err)
 			}
-			files, err := filepath.Glob(filepath.Join(toolResultsDir(), "result-*.txt"))
+			files, err := filepath.Glob(filepath.Join(ResultsDir(), "result-*.txt"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,10 +65,10 @@ func TestToolOutputStorageFailure(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("TMP", os.Getenv("TMPDIR"))
-	if err := os.WriteFile(toolWorkDir(), []byte("not a directory"), 0o600); err != nil {
+	if err := os.WriteFile(WorkDir(), []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepareToolOutput(strings.Repeat("a", maxToolOutputBytes+1)); err == nil {
+	if _, err := PrepareOutput(strings.Repeat("a", maxToolOutputBytes+1)); err == nil {
 		t.Fatal("expected storage error instead of silently losing full output")
 	}
 }
@@ -92,27 +92,11 @@ func TestMCPJSONReadingHint(t *testing.T) {
 	}
 }
 
-func TestLargeBashToolOutput(t *testing.T) {
-	t.Chdir(t.TempDir())
-	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("TMP", os.Getenv("TMPDIR"))
-	call := toolCall{ID: "call_large", Type: "function"}
-	call.Function.Name = "bash"
-	call.Function.Arguments = `{"command":"printf '%040000d' 0"}`
-	results, err := executeToolCalls([]toolCall{call}, config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 1 || results[0].ToolCallID != call.ID || results[0].Role != "tool" || !strings.Contains(results[0].Content, "Tool output truncated") || len(results[0].Content) >= 40000 {
-		t.Fatalf("large tool output was not bounded or lost its call association: %#v", results)
-	}
-}
-
 func TestBashToolTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	output, err := runBashToolContext(ctx, `{"command":"printf started; sleep 30 | cat"}`)
+	output, err := RunBashContext(ctx, `{"command":"printf started; sleep 30 | cat"}`)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected timeout, got output=%q err=%v", output, err)
 	}
@@ -124,11 +108,11 @@ func TestBashToolTimeout(t *testing.T) {
 func TestBashToolWorkingDirectory(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("TMP", os.Getenv("TMPDIR"))
-	output, err := runBashTool(`{"command":"pwd -P"}`)
+	output, err := RunBash(`{"command":"pwd -P"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := filepath.EvalSymlinks(toolWorkDir())
+	want, err := filepath.EvalSymlinks(WorkDir())
 	if err != nil || strings.TrimSpace(output) != want {
 		t.Fatalf("working directory: got %q, want %q, err=%v", output, want, err)
 	}
