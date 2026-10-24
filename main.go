@@ -98,6 +98,9 @@ type streamRenderMsg struct{}
 
 type chatStatusMsg string
 
+// chatTickMsg refreshes the status line while a tool call is running.
+type chatTickMsg struct{}
+
 type tuiModel struct {
 	cfg            config
 	memoryName     string
@@ -116,6 +119,10 @@ type tuiModel struct {
 	activity       string
 	streaming      string
 	userScrolled   bool
+	activityBase   string
+	activityLabel  string
+	activitySince  time.Time
+	activityTicker bool
 	lastScrollKey  string
 	streamRendered string
 	markdown       *glamour.TermRenderer
@@ -140,6 +147,7 @@ var (
 	botStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	hintStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
 	streamProgram *tea.Program
 )
@@ -346,6 +354,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.SetValue("")
 			m.loading = true
 			m.activity = "waiting for model..."
+			m.activityBase = m.activity
+			m.activityLabel = ""
+			m.activitySince = time.Now()
+			m.activityTicker = false
 			m.streaming = ""
 			m.err = ""
 			m.userScrolled = false
@@ -380,8 +392,30 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case chatStatusMsg:
-		m.activity = string(msg)
-		return m, nil
+		m.activityBase = string(msg)
+		m.activity = m.activityBase
+		m.activityLabel = ""
+		m.activitySince = time.Now()
+		return m, m.toolTickCmd()
+
+	case chatTickMsg:
+		if !m.toolTickCmdActive() {
+			m.activityTicker = false
+			return m, nil
+		}
+		since := time.Since(m.activitySince)
+		if since >= time.Second {
+			label := m.activityBase + " · " + fmtDuration(since)
+			if label != m.activityLabel {
+				m.activityLabel = label
+				if since >= 30*time.Second {
+					m.activity = warnStyle.Render(label)
+				} else {
+					m.activity = label
+				}
+			}
+		}
+		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return chatTickMsg{} })
 
 	case streamRenderMsg:
 		m.renderPending = false
@@ -417,6 +451,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatResultMsg:
 		m.loading = false
 		m.renderPending = false
+		m.activityTicker = false
+		m.activity = ""
+		m.activityBase = ""
+		m.activityLabel = ""
+		m.activitySince = time.Time{}
 		if !m.traceOpen {
 			m.userScrolled = false
 		}
@@ -456,6 +495,24 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, _ = m.textarea.Update(msg)
 		return m, tea.Batch(cmds...)
 	}
+}
+
+// toolTickCmdActive reports whether the elapsed-time ticker should keep running.
+func (m *tuiModel) toolTickCmdActive() bool {
+	return m.loading && strings.HasPrefix(m.activityBase, "running tool:")
+}
+
+// toolTickCmd schedules the elapsed-time ticker for a running tool, once.
+func (m *tuiModel) toolTickCmd() tea.Cmd {
+	if !m.toolTickCmdActive() {
+		m.activityTicker = false
+		return nil
+	}
+	if m.activityTicker {
+		return nil
+	}
+	m.activityTicker = true
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return chatTickMsg{} })
 }
 
 func (m tuiModel) View() string {
@@ -959,11 +1016,11 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 
 		var output string
 		var err error
-		cfg.reportStatus("running tool: " + call.Function.Name)
+		cfg.reportStatus("running tool: " + call.Function.Name + " " + toolArgsSummary(call))
 		started := time.Now()
 		cfg.emitTrace(traceEvent{Type: "tool.started", Tool: call.Function.Name, ToolCallID: call.ID, Arguments: call.Function.Arguments})
 		if cfg.Logger != nil {
-			cfg.Logger.Printf("tool name=%q started", call.Function.Name)
+			cfg.Logger.Printf("tool name=%q args=%q started", call.Function.Name, call.Function.Arguments)
 		}
 		switch call.Function.Name {
 		case "bash":
@@ -1042,6 +1099,16 @@ func runBashToolContext(ctx context.Context, rawArgs string) (string, error) {
 		return string(output), fmt.Errorf("bash command stopped: %w; use a narrower command or search only the saved tool-results directory", ctx.Err())
 	}
 	return string(output), err
+}
+
+func fmtDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func max(a, b int) int {
