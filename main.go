@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -127,6 +128,9 @@ type tuiModel struct {
 	mcpInfo        string
 	providersOpen  bool
 	providerCursor int
+	traceOpen      bool
+	traceEvents    []traceEvent
+	chatOffset     int
 }
 
 var (
@@ -152,6 +156,7 @@ func run() error {
 	memory := flag.String("memory", "", "conversation id to persist under .hanoi/")
 	tui := flag.Bool("tui", false, "interactive chat mode")
 	logPath := flag.String("log", "", "API log file (includes prompts and tool output)")
+	tracePath := flag.String("trace", "", "structured lifecycle trace file (JSONL)")
 	configPath := flag.String("config", "", "config file (default: hanoi.json[c] or opencode.json[c])")
 	model := flag.String("model", "", "model to use (provider/model or legacy model name)")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -175,6 +180,14 @@ func run() error {
 		defer file.Close()
 		cfg.Logger = log.New(file, "", log.Ldate|log.Ltime|log.Lmicroseconds|log.LUTC)
 	}
+	if *tracePath != "" {
+		file, err := os.OpenFile(*tracePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open trace: %w", err)
+		}
+		defer file.Close()
+		cfg.Trace = &traceRecorder{writer: file}
+	}
 
 	cfg.MCP, err = newMCPManager(*configPath, cfg.Logger)
 	if err != nil {
@@ -187,7 +200,7 @@ func run() error {
 	}
 
 	if flag.NArg() < 1 {
-		return fmt.Errorf("usage: %s [-stream] [-memory chat1] [-tui] [-log api.log] [-config hanoi.json] [-model provider/model] \"your prompt\"", os.Args[0])
+		return fmt.Errorf("usage: %s [-stream] [-memory chat1] [-tui] [-log api.log] [-trace trace.jsonl] [-config hanoi.json] [-model provider/model] \"your prompt\"", os.Args[0])
 	}
 
 	prompt := strings.Join(flag.Args(), " ")
@@ -219,6 +232,9 @@ func run() error {
 }
 
 func runTUI(cfg config, memoryName string) error {
+	if cfg.Trace == nil {
+		cfg.Trace = &traceRecorder{}
+	}
 	messages := []message{}
 	var err error
 	if memoryName != "" {
@@ -297,6 +313,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.providersOpen {
 			return m.updateProviderMenu(msg)
 		}
+		if msg.String() == "ctrl+t" || (m.traceOpen && msg.String() == "esc") {
+			m.toggleTrace()
+			return m, nil
+		}
 		if m.scrollChat(msg) {
 			m.userScrolled = true
 			m.refreshChat()
@@ -349,6 +369,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case traceEvent:
+		m.traceEvents = append(m.traceEvents, msg)
+		if len(m.traceEvents) > 2000 {
+			m.traceEvents = append([]traceEvent(nil), m.traceEvents[len(m.traceEvents)-2000:]...)
+		}
+		if m.traceOpen {
+			m.refreshChat()
+		}
+		return m, nil
+
 	case chatStatusMsg:
 		m.activity = string(msg)
 		return m, nil
@@ -387,7 +417,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatResultMsg:
 		m.loading = false
 		m.renderPending = false
-		m.userScrolled = false
+		if !m.traceOpen {
+			m.userScrolled = false
+		}
 		if msg.err != nil {
 			m.err = msg.err.Error()
 			m.streaming = ""
@@ -557,7 +589,11 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /exit\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · ↑/↓ (input history)"
+		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /trace /exit\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		return m, nil
+	case "/trace":
+		m.textarea.SetValue("")
+		m.toggleTrace()
 		return m, nil
 	case "/mcps":
 		m.textarea.SetValue("")
@@ -594,6 +630,11 @@ func appendMessage(messages []message, system string, user message) []message {
 
 func streamChatCmd(cfg config, messages []message) tea.Cmd {
 	return func() tea.Msg {
+		cfg.OnTrace = func(event traceEvent) {
+			if streamProgram != nil {
+				streamProgram.Send(event)
+			}
+		}
 		cfg.OnStatus = func(status string) {
 			if streamProgram != nil {
 				streamProgram.Send(chatStatusMsg(status))
@@ -658,53 +699,19 @@ func sendChatRequest(cfg config, payload []byte) (*http.Response, error) {
 	return resp, nil
 }
 
-func sendChat(cfg config, messages []message, stream bool) (string, error) {
+func sendChat(cfg config, messages []message, stream bool) (text string, err error) {
+	cfg, finish := cfg.beginTrace(messages)
+	defer func() { err = finish(err) }()
 	if stream {
 		return sendStreamingChat(cfg, messages, func(piece string) {
 			fmt.Print(piece)
 		})
 	}
 
-	body := chatRequest{
-		Model:    cfg.Model,
-		Messages: messages,
-		Tools:    availableTools(cfg),
-		Stream:   false,
-	}
-
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
-
-	resp, err := sendChatRequest(cfg, payload)
+	msg, err := requestModel(cfg, messages, false, nil)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return "", fmt.Errorf("api error (%s)", resp.Status)
-		}
-		return "", fmt.Errorf("api error (%s): %s", resp.Status, string(respBody))
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	var result chatResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
-	}
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("no choices returned")
-	}
-
-	msg := result.Choices[0].Message
 	if len(msg.ToolCalls) == 0 {
 		return msg.Content, nil
 	}
@@ -723,36 +730,13 @@ func sendChat(cfg config, messages []message, stream bool) (string, error) {
 	return sendChat(cfg, followupMessages, false)
 }
 
-func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (string, error) {
+func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (text string, err error) {
+	cfg, finish := cfg.beginTrace(messages)
+	defer func() { err = finish(err) }()
 	messages = append([]message{}, messages...)
 	var out strings.Builder
 	for {
-		body := chatRequest{
-			Model:    cfg.Model,
-			Messages: messages,
-			Tools:    availableTools(cfg),
-			Stream:   true,
-		}
-
-		payload, err := json.Marshal(body)
-		if err != nil {
-			return "", fmt.Errorf("marshal request: %w", err)
-		}
-		resp, err := sendChatRequest(cfg, payload)
-		if err != nil {
-			return "", err
-		}
-		if resp.StatusCode >= 300 {
-			respBody, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if readErr != nil {
-				return "", fmt.Errorf("api error (%s)", resp.Status)
-			}
-			return "", fmt.Errorf("api error (%s): %s", resp.Status, string(respBody))
-		}
-
-		msg, err := handleStream(resp.Body, onChunk)
-		resp.Body.Close()
+		msg, err := requestModel(cfg, messages, true, onChunk)
 		if err != nil {
 			return "", err
 		}
@@ -771,6 +755,50 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (st
 		messages = append(messages, msg)
 		messages = append(messages, toolMessages...)
 	}
+}
+
+func requestModel(cfg config, messages []message, stream bool, onChunk func(string)) (msg message, err error) {
+	started := time.Now()
+	cfg.emitTrace(traceEvent{Type: "model.started"})
+	defer func() {
+		e := traceEvent{Type: "model.completed", Status: "completed", DurationMS: traceDuration(started), ToolCalls: len(msg.ToolCalls), OutputBytes: len(msg.Content)}
+		if err != nil {
+			e.Status, e.Error = "error", err.Error()
+		}
+		cfg.emitTrace(e)
+	}()
+	payload, err := json.Marshal(chatRequest{Model: cfg.Model, Messages: messages, Tools: availableTools(cfg), Stream: stream})
+	if err != nil {
+		return msg, fmt.Errorf("marshal request: %w", err)
+	}
+	resp, err := sendChatRequest(cfg, payload)
+	if err != nil {
+		return msg, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return msg, fmt.Errorf("api error (%s)", resp.Status)
+		}
+		return msg, fmt.Errorf("api error (%s): %s", resp.Status, body)
+	}
+	if stream {
+		return handleStream(resp.Body, onChunk)
+	}
+	var result chatResponse
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return msg, fmt.Errorf("read response: %w", err)
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return msg, fmt.Errorf("decode response: %w", err)
+	}
+	if len(result.Choices) == 0 {
+		return msg, fmt.Errorf("no choices returned")
+	}
+	choice := result.Choices[0].Message
+	return message{Role: choice.Role, Content: choice.Content, ToolCalls: choice.ToolCalls}, nil
 }
 
 func handleStream(body io.Reader, onChunk func(string)) (message, error) {
@@ -933,6 +961,7 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 		var err error
 		cfg.reportStatus("running tool: " + call.Function.Name)
 		started := time.Now()
+		cfg.emitTrace(traceEvent{Type: "tool.started", Tool: call.Function.Name, ToolCallID: call.ID, Arguments: call.Function.Arguments})
 		if cfg.Logger != nil {
 			cfg.Logger.Printf("tool name=%q started", call.Function.Name)
 		}
@@ -945,6 +974,32 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 		if cfg.Logger != nil {
 			cfg.Logger.Printf("tool name=%q finished duration=%s failed=%t", call.Function.Name, time.Since(started), err != nil)
 		}
+		event := traceEvent{Type: "tool.completed", Tool: call.Function.Name, ToolCallID: call.ID, DurationMS: traceDuration(started), OutputBytes: len(output), Status: "completed"}
+		if call.Function.Name != "bash" && err == nil {
+			var result struct {
+				IsError bool `json:"isError"`
+			}
+			if json.Unmarshal([]byte(output), &result) == nil && result.IsError {
+				event.Status, event.Error = "error", "MCP tool returned isError=true"
+			}
+		}
+		if err != nil {
+			event.Status, event.Error = "error", err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				event.Status = "timeout"
+			}
+		}
+		if call.Function.Name == "bash" {
+			var exitErr *exec.ExitError
+			if err == nil {
+				code := 0
+				event.ExitCode = &code
+			} else if errors.As(err, &exitErr) {
+				code := exitErr.ExitCode()
+				event.ExitCode = &code
+			}
+		}
+		cfg.emitTrace(event)
 		if err != nil {
 			output = err.Error() + "\n" + output
 		}
@@ -955,6 +1010,7 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 		toolMessages = append(toolMessages, message{
 			Role: "tool", Name: call.Function.Name, ToolCallID: call.ID, Content: output,
 		})
+		cfg.emitTrace(traceEvent{Type: "tool.result", Tool: call.Function.Name, ToolCallID: call.ID, ResultBytes: len(output)})
 	}
 	return toolMessages, nil
 }

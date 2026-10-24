@@ -1,3 +1,5 @@
+.hanoi
 hanoi
+hanoi.json
 *.log
 .hanoi/tool-results/
