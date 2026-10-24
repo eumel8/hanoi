@@ -53,6 +53,9 @@ func (m tuiModel) chatHeader() []string {
 	if m.traceOpen {
 		header = append(header, headStyle.Render("Hanoi Trace · Ctrl+T / Esc returns to chat"))
 	}
+	if m.doctorOpen {
+		header = append(header, headStyle.Render("Hanoi Doctor · Esc returns to chat"))
+	}
 	return header
 }
 
@@ -68,7 +71,9 @@ func (m *tuiModel) resizeChat() {
 func (m *tuiModel) refreshChat() {
 	follow := !m.userScrolled && (m.viewport.AtBottom() || m.viewport.TotalLineCount() == 0)
 	body := strings.Join(m.history, "\n\n")
-	if m.traceOpen {
+	if m.doctorOpen {
+		body = doctorReportText(m.doctorText)
+	} else if m.traceOpen {
 		body = renderTrace(m.traceEvents)
 	} else if m.streaming != "" {
 		body += "\n\n" + botStyle.Render("assistant") + "\n" + m.streamRendered

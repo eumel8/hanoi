@@ -10,12 +10,15 @@ import (
 // config combines model settings with application-owned runtime services.
 type config struct {
 	appconfig.Config
-	Logger   *log.Logger
-	MCP      *mcpManager
-	OnStatus func(string)
-	Trace    *trace.Recorder
-	OnTrace  func(traceEvent)
-	traceRun *trace.Run
+	Logger     *log.Logger
+	MCP        *mcpManager
+	OnStatus   func(string)
+	Trace      *trace.Recorder
+	OnTrace    func(traceEvent)
+	traceRun   *trace.Run
+	ConfigPath string
+	LogPath    string
+	TracePath  string
 }
 
 func (cfg config) reportStatus(status string) {
@@ -48,7 +51,11 @@ func (cfg config) emitTrace(event traceEvent) {
 
 func loadConfig(explicit, selection string) (config, error) {
 	settings, err := appconfig.Load(explicit, selection)
-	return config{Config: settings}, err
+	if err != nil {
+		return config{}, err
+	}
+	path, err := appconfig.FindFile(explicit)
+	return config{Config: settings, ConfigPath: path}, err
 }
 
 func (cfg config) selectModel(selection string) (config, error) {
