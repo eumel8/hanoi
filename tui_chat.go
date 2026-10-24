@@ -11,7 +11,7 @@ import (
 func (m tuiModel) chatHeader() []string {
 	header := []string{
 		headStyle.Render("hanoi TUI"),
-		hintStyle.Render("Enter send · ↑/↓ history · Ctrl+↑↓ scroll · 2x Ctrl+↑↓ top/bottom · /help"),
+		hintStyle.Render("Enter send · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · /help"),
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
 	}
 	if m.memoryName != "" {
@@ -19,6 +19,9 @@ func (m tuiModel) chatHeader() []string {
 	}
 	if m.system != "" {
 		header = append(header, hintStyle.Render("system: "+m.system))
+	}
+	if m.traceOpen {
+		header = append(header, headStyle.Render("Hanoi Trace · Ctrl+T / Esc returns to chat"))
 	}
 	return header
 }
@@ -35,7 +38,9 @@ func (m *tuiModel) resizeChat() {
 func (m *tuiModel) refreshChat() {
 	follow := !m.userScrolled && (m.viewport.AtBottom() || m.viewport.TotalLineCount() == 0)
 	body := strings.Join(m.history, "\n\n")
-	if m.streaming != "" {
+	if m.traceOpen {
+		body = renderTrace(m.traceEvents)
+	} else if m.streaming != "" {
 		body += "\n\n" + botStyle.Render("assistant") + "\n" + m.streamRendered
 	}
 	if body == "" {

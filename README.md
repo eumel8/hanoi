@@ -13,6 +13,7 @@ Basic AI harness in Go.
 - works as a simple OpenAI-compatible harness
 - includes OpenAI-style tool calling with a local `bash` tool
 - optional API logging with `-log <file>`
+- live Hanoi Trace timeline in the TUI and optional structured JSONL export with `-trace <file>`
 - MCP tools from local and remote servers, with OpenCode-compatible config and `/mcps` management
 - tag-based `-version` output and GitHub Actions builds for Linux, macOS, and Windows
 
@@ -76,9 +77,41 @@ Inside TUI:
 - `/providers`, `/models`, or `/model` opens the provider/model picker
 - `/system <text>` sets the system prompt
 - `/mcps` opens MCP server management
+- `/trace` or `Ctrl+T` toggles the live trace timeline, including while a response is running;
+  `Esc` returns to chat and restores its scroll position
 - `/help` shows commands
 
 <img src="example.png" alt="hanoi" />
+
+### Hanoi Trace
+
+Trace shows the execution of each new turn: user input, provider/model requests,
+response duration and tool-call count, Bash/MCP calls and arguments, execution
+duration, Bash exit codes, errors/timeouts, and tool-result sizes passed back to
+the model. Both streaming and non-streaming requests use the same event format.
+Tool errors remain visible even when the model recovers and completes the turn.
+
+```bash
+go run . -tui -trace trace.jsonl
+go run . -trace trace.jsonl "Inspect the current workspace"
+go run . -stream -trace trace.jsonl "Inspect the current workspace"
+```
+
+The file is append-only JSONL (one event per line), created with mode `0600`.
+Each event has a timestamp, run ID, turn number, sequence number and model
+reference. Event types are `turn.started`, `model.started`, `model.completed`,
+`tool.started`, `tool.completed`, `tool.result`, and `turn.completed`.
+Durations are in milliseconds; output sizes are bytes before truncation and
+result sizes are bytes after preparation for the next model request.
+Sequence and turn numbers restart with each process; run IDs correlate events
+across appended sessions. A completed turn means the model finished, not that
+its claims were independently verified.
+
+The TUI retains the latest 2,000 events for the current session; the file keeps
+all events. Saved conversation history does not reconstruct earlier traces.
+Trace includes prompts, tool arguments and errors, but omits credentials from
+request headers and does not record complete model responses or tool output.
+Use `-log api.log` for the existing full API-payload logging when needed.
 
 Build:
 

@@ -12,6 +12,9 @@ type config struct {
 	Logger   *log.Logger
 	MCP      *mcpManager
 	OnStatus func(string)
+	Trace    *traceRecorder
+	OnTrace  func(traceEvent)
+	traceRun *traceRun
 }
 
 func (cfg config) reportStatus(status string) {
