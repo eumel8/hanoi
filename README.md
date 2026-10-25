@@ -48,6 +48,42 @@ OPENAI_BASE_URL=https://api.openai.com/v1/chat/completions
 
 Environment variables still work too.
 
+If a Chat Completions provider explicitly rejects function tools combined with
+reasoning and instructs Hanoi to set `reasoning_effort` to `none`, Hanoi retries
+that request once with `reasoning_effort: "none"`. Bash and MCP tools remain
+enabled. The retry is shown in the TUI status and API log; other API errors are
+returned normally. This applies to streaming and non-streaming requests, including
+environment-only configuration.
+
+### Windows: install Bash
+
+Hanoi's built-in tool runs commands using `bash -lc`. **Bash must be installed
+and `bash.exe` must be available on `PATH`**, including when starting Hanoi from
+PowerShell or Command Prompt. PowerShell alone does not provide Bash.
+
+Install [Git for Windows](https://gitforwindows.org/), which includes Git Bash.
+You can also install it from PowerShell using WinGet:
+
+```powershell
+winget install --id Git.Git -e --source winget
+```
+
+After installation, start Hanoi from **Git Bash**, or add the Git Bash executable
+directory to your PowerShell session's `PATH` (adjust for your installation):
+
+```powershell
+Test-Path "C:\Program Files\Git\bin\bash.exe"
+$env:Path = "C:\Program Files\Git\bin;$env:Path"
+Get-Command bash
+.\hanoi.exe -tui
+```
+
+The `PATH` change above applies only to the current PowerShell session. To make
+it persistent, add `C:\Program Files\Git\bin` to your user `Path` in Windows
+Environment Variables and open a new terminal. Run `/doctor` in Hanoi to verify
+that Bash is detected. If it reports `executable not found in PATH`, Bash is
+not yet accessible to the Hanoi process.
+
 ## Run
 
 Single prompt:

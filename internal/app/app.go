@@ -38,10 +38,11 @@ type message struct {
 }
 
 type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []message `json:"messages"`
-	Tools    []tool    `json:"tools,omitempty"`
-	Stream   bool      `json:"stream,omitempty"`
+	Model           string    `json:"model"`
+	Messages        []message `json:"messages"`
+	Tools           []tool    `json:"tools,omitempty"`
+	Stream          bool      `json:"stream,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 }
 
 type tool struct {
@@ -872,7 +873,11 @@ func requestModel(cfg config, messages []message, stream bool, onChunk func(stri
 		}
 		cfg.emitTrace(e)
 	}()
-	payload, err := json.Marshal(chatRequest{Model: cfg.Model, Messages: messages, Tools: availableTools(cfg), Stream: stream})
+	return requestModelAttempt(cfg, chatRequest{Model: cfg.Model, Messages: messages, Tools: availableTools(cfg), Stream: stream}, onChunk)
+}
+
+func requestModelAttempt(cfg config, request chatRequest, onChunk func(string)) (msg message, err error) {
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return msg, fmt.Errorf("marshal request: %w", err)
 	}
@@ -886,9 +891,18 @@ func requestModel(cfg config, messages []message, stream bool, onChunk func(stri
 		if readErr != nil {
 			return msg, fmt.Errorf("api error (%s)", resp.Status)
 		}
+		if request.ReasoningEffort == "" && len(request.Tools) > 0 && requiresToolReasoningNone(resp.StatusCode, body) {
+			resp.Body.Close()
+			cfg.reportStatus("provider requires reasoning_effort=none for tools; retrying...")
+			if cfg.Logger != nil {
+				cfg.Logger.Print("retrying tool request with reasoning_effort=none as required by provider")
+			}
+			request.ReasoningEffort = "none"
+			return requestModelAttempt(cfg, request, onChunk)
+		}
 		return msg, fmt.Errorf("api error (%s): %s", resp.Status, body)
 	}
-	if stream {
+	if request.Stream {
 		return handleStream(resp.Body, onChunk)
 	}
 	var result chatResponse
@@ -904,6 +918,25 @@ func requestModel(cfg config, messages []message, stream bool, onChunk func(stri
 	}
 	choice := result.Choices[0].Message
 	return message{Role: choice.Role, Content: choice.Content, ToolCalls: choice.ToolCalls}, nil
+}
+
+func requiresToolReasoningNone(status int, body []byte) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var response struct {
+		Error struct {
+			Message string `json:"message"`
+			Param   string `json:"param"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return false
+	}
+	return response.Error.Type == "invalid_request_error" && response.Error.Param == "reasoning_effort" &&
+		strings.Contains(response.Error.Message, "Function tools with reasoning_effort are not supported") &&
+		strings.Contains(response.Error.Message, "set reasoning_effort to 'none'")
 }
 
 func handleStream(body io.Reader, onChunk func(string)) (message, error) {
