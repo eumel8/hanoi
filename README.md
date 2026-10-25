@@ -48,6 +48,14 @@ OPENAI_BASE_URL=https://api.openai.com/v1/chat/completions
 
 Environment variables still work too.
 
+OpenAI `gpt-6-astra` and `gpt-6.1-sol` require the Responses API for function
+calling. Hanoi automatically uses `/v1/responses` for these models on
+`api.openai.com`, including when `OPENAI_BASE_URL` is the usual Chat Completions
+URL. Reasoning remains enabled; Bash/MCP tools, streaming and tool follow-up
+rounds are supported. Other compatible providers can opt in by setting their
+base URL to the full `/responses` endpoint. Responses requests use `store: false`
+and pass encrypted reasoning items back within the current tool loop.
+
 If a Chat Completions provider explicitly rejects function tools combined with
 reasoning and instructs Hanoi to set `reasoning_effort` to `none`, Hanoi retries
 that request once with `reasoning_effort: "none"`. Bash and MCP tools remain

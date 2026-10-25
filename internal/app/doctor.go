@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -96,7 +97,13 @@ func probeProvider(cfg config) doctor.Check {
 	check := doctor.Check{Name: "Provider connection", Status: "FAIL"}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	payload, err := json.Marshal(chatRequest{Model: cfg.Model, Messages: []message{{Role: "user", Content: "Reply with OK."}}})
+	var request any = chatRequest{Model: cfg.Model, Messages: []message{{Role: "user", Content: "Reply with OK."}}}
+	u, _ := url.Parse(cfg.BaseURL)
+	responses := u != nil && strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/responses")
+	if responses {
+		request = map[string]any{"model": cfg.Model, "input": "Reply with OK.", "store": false}
+	}
+	payload, err := json.Marshal(request)
 	if err != nil {
 		check.Detail = "could not encode test request"
 		return check
@@ -124,6 +131,15 @@ func probeProvider(cfg config) doctor.Check {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		check.Detail = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return check
+	}
+	if responses {
+		var result responseResult
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&result); err != nil || result.Status != "completed" || len(result.Output) == 0 || result.Error != nil {
+			check.Detail = "response is not a completed Responses result"
+			return check
+		}
+		check.Status, check.Detail = "OK", fmt.Sprintf("model response received in %s", time.Since(started).Round(time.Millisecond))
 		return check
 	}
 	var result chatResponse
