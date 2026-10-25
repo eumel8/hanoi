@@ -172,7 +172,7 @@ func chatEndpoint(baseURL string) (string, error) {
 		return "", fmt.Errorf("baseURL must be an http:// or https:// URL without userinfo or fragment")
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	if !strings.HasSuffix(u.Path, "/chat/completions") {
+	if !strings.HasSuffix(u.Path, "/chat/completions") && !strings.HasSuffix(u.Path, "/responses") {
 		u.Path += "/chat/completions"
 	}
 	return u.String(), nil

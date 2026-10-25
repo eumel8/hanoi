@@ -30,11 +30,12 @@ import (
 )
 
 type message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Name       string     `json:"name,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	Role           string            `json:"role"`
+	Content        string            `json:"content"`
+	Name           string            `json:"name,omitempty"`
+	ToolCallID     string            `json:"tool_call_id,omitempty"`
+	ToolCalls      []toolCall        `json:"tool_calls,omitempty"`
+	ResponseOutput []json.RawMessage `json:"-"`
 }
 
 type chatRequest struct {
@@ -828,9 +829,10 @@ func sendChat(cfg config, messages []message, stream bool) (text string, err err
 	}
 
 	followupMessages := append(append([]message{}, messages...), message{
-		Role:      msg.Role,
-		Content:   msg.Content,
-		ToolCalls: msg.ToolCalls,
+		Role:           msg.Role,
+		Content:        msg.Content,
+		ToolCalls:      msg.ToolCalls,
+		ResponseOutput: msg.ResponseOutput,
 	})
 	followupMessages = append(followupMessages, toolMessages...)
 	return sendChat(cfg, followupMessages, false)
@@ -873,6 +875,9 @@ func requestModel(cfg config, messages []message, stream bool, onChunk func(stri
 		}
 		cfg.emitTrace(e)
 	}()
+	if useResponses(cfg) {
+		return requestResponse(cfg, messages, availableTools(cfg), stream, onChunk)
+	}
 	return requestModelAttempt(cfg, chatRequest{Model: cfg.Model, Messages: messages, Tools: availableTools(cfg), Stream: stream}, onChunk)
 }
 
