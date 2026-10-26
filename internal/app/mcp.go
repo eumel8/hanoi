@@ -384,6 +384,10 @@ func (m *mcpManager) Tools() []tool {
 }
 
 func (m *mcpManager) Call(name, rawArgs string) (string, error) {
+	return m.CallContext(context.Background(), name, rawArgs)
+}
+
+func (m *mcpManager) CallContext(parent context.Context, name, rawArgs string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
@@ -410,7 +414,7 @@ func (m *mcpManager) Call(name, rawArgs string) (string, error) {
 		return "", fmt.Errorf("MCP tool unavailable: %s (check /mcps)", name)
 	}
 	m.logf("server=%q tool=%q calling arguments=%s", serverName, originalName, rawArgs)
-	ctx, cancel := context.WithTimeout(context.Background(), milliseconds(timeout))
+	ctx, cancel := context.WithTimeout(parent, milliseconds(timeout))
 	defer cancel()
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: originalName, Arguments: args})
 	if err != nil {

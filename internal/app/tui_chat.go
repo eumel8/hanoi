@@ -41,7 +41,7 @@ func clipArgs(s string, limit int) string {
 func (m tuiModel) chatHeader() []string {
 	header := []string{
 		headStyle.Render("hanoi TUI"),
-		hintStyle.Render("Enter send · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · /help"),
+		hintStyle.Render("Enter send · Esc Esc stop · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · /help"),
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
 	}
 	if m.memoryName != "" {

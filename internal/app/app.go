@@ -121,6 +121,9 @@ type tuiModel struct {
 	width          int
 	height         int
 	loading        bool
+	chatCancel     context.CancelFunc
+	cancelling     bool
+	lastEscape     time.Time
 	activity       string
 	streaming      string
 	userScrolled   bool
@@ -288,8 +291,11 @@ func runTUI(cfg config, memoryName string) error {
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	streamProgram = p
-	_, err = p.Run()
-	return err
+	final, runErr := p.Run()
+	if model, ok := final.(tuiModel); ok && model.chatCancel != nil {
+		model.chatCancel()
+	}
+	return runErr
 }
 
 func (m tuiModel) Init() tea.Cmd {
@@ -308,7 +314,27 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
+			if m.chatCancel != nil {
+				m.chatCancel()
+			}
 			return m, tea.Quit
+		}
+		if m.loading && msg.Type == tea.KeyEsc {
+			now := time.Now()
+			// Some terminals deliver two adjacent escapes as a single Alt+Esc.
+			if msg.Alt || (!m.lastEscape.IsZero() && now.Sub(m.lastEscape) <= time.Second) {
+				if m.chatCancel != nil {
+					m.chatCancel()
+				}
+				m.cancelling = true
+				m.activity = "stopping..."
+				m.activityBase = m.activity
+				m.lastEscape = time.Time{}
+				return m, nil
+			}
+			m.lastEscape = now
+		} else if msg.Type != tea.KeyEsc {
+			m.lastEscape = time.Time{}
 		}
 
 		if m.mcpBusy {
@@ -368,6 +394,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append([]message{}, m.pendingMessage...)
 			m.textarea.SetValue("")
 			m.loading = true
+			m.cancelling = false
+			m.lastEscape = time.Time{}
+			ctx, cancel := context.WithCancel(context.Background())
+			m.chatCancel = cancel
 			m.activity = "waiting for model..."
 			m.activityBase = m.activity
 			m.activityLabel = ""
@@ -378,7 +408,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.userScrolled = false
 			m.rebuildHistory()
 			m.viewport.GotoBottom()
-			return m, tea.Batch(m.spinner.Tick, streamChatCmd(m.cfg, m.pendingMessage))
+			cfg := m.cfg
+			cfg.Context = ctx
+			return m, tea.Batch(m.spinner.Tick, streamChatCmd(cfg, m.pendingMessage))
 		case "alt+enter":
 			m.textarea.InsertRune('\n')
 			return m, nil
@@ -389,6 +421,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case chatChunkMsg:
+		if !m.loading || m.cancelling {
+			return m, nil
+		}
 		m.streaming += msg.text
 		if !m.renderPending {
 			m.renderPending = true
@@ -416,6 +451,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case chatStatusMsg:
+		if !m.loading || m.cancelling {
+			return m, nil
+		}
 		m.activityBase = string(msg)
 		m.activity = m.activityBase
 		m.activityLabel = ""
@@ -473,6 +511,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case chatResultMsg:
+		if m.chatCancel != nil {
+			m.chatCancel()
+			m.chatCancel = nil
+		}
+		cancelled := m.cancelling || errors.Is(msg.err, context.Canceled)
+		m.cancelling = false
+		m.lastEscape = time.Time{}
 		m.loading = false
 		m.renderPending = false
 		m.activityTicker = false
@@ -483,7 +528,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.traceOpen {
 			m.userScrolled = false
 		}
-		if msg.err != nil {
+		if cancelled {
+			m.err = "Stopped."
+			msg.text = m.streaming
+		} else if msg.err != nil {
 			m.err = msg.err.Error()
 			m.streaming = ""
 			m.messages = m.messages[:max(0, len(m.messages)-1)]
@@ -492,7 +540,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.streaming = ""
-		m.messages = append(m.messages, message{Role: "assistant", Content: msg.text})
+		if msg.text != "" {
+			m.messages = append(m.messages, message{Role: "assistant", Content: msg.text})
+		}
 		if m.memoryName != "" {
 			if err := saveMemory(m.memoryName, m.messages); err != nil {
 				m.err = fmt.Sprintf("save memory: %v", err)
@@ -673,7 +723,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /trace /doctor [provider] /exit\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
 		return m, nil
 	case "/doctor":
 		if arg != "" && arg != "provider" {
@@ -752,6 +802,9 @@ func streamChatCmd(cfg config, messages []message) tea.Cmd {
 				streamProgram.Send(chatChunkMsg{text: piece})
 			}
 		})
+		if cfg.context().Err() != nil {
+			err = cfg.context().Err()
+		}
 		return chatResultMsg{text: text, err: err}
 	}
 }
@@ -773,7 +826,7 @@ type loggedResponseBody struct {
 
 func sendChatRequest(cfg config, payload []byte) (*http.Response, error) {
 	cfg.reportStatus("waiting for model...")
-	req, err := http.NewRequest(http.MethodPost, cfg.BaseURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(cfg.context(), http.MethodPost, cfg.BaseURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -1092,6 +1145,9 @@ func availableTools(cfg config) []tool {
 func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 	toolMessages := make([]message, 0, len(calls))
 	for _, call := range calls {
+		if err := cfg.context().Err(); err != nil {
+			return nil, err
+		}
 		if call.Type != "function" {
 			return nil, fmt.Errorf("unsupported tool call type: %s", call.Type)
 		}
@@ -1106,9 +1162,11 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 		}
 		switch call.Function.Name {
 		case "bash":
-			output, err = tools.RunBash(call.Function.Arguments)
+			ctx, cancel := context.WithTimeout(cfg.context(), 30*time.Second)
+			output, err = tools.RunBashContext(ctx, call.Function.Arguments)
+			cancel()
 		default:
-			output, err = cfg.MCP.Call(call.Function.Name, call.Function.Arguments)
+			output, err = cfg.MCP.CallContext(cfg.context(), call.Function.Name, call.Function.Arguments)
 		}
 		if cfg.Logger != nil {
 			cfg.Logger.Printf("tool name=%q finished duration=%s failed=%t", call.Function.Name, time.Since(started), err != nil)
@@ -1139,6 +1197,9 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 			}
 		}
 		cfg.emitTrace(event)
+		if err := cfg.context().Err(); err != nil {
+			return nil, err
+		}
 		if err != nil {
 			output = err.Error() + "\n" + output
 		}
