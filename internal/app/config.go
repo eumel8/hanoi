@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"log"
 
 	appconfig "hanoi/internal/config"
@@ -19,6 +20,14 @@ type config struct {
 	ConfigPath string
 	LogPath    string
 	TracePath  string
+	Context    context.Context
+}
+
+func (cfg config) context() context.Context {
+	if cfg.Context != nil {
+		return cfg.Context
+	}
+	return context.Background()
 }
 
 func (cfg config) reportStatus(status string) {

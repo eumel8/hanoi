@@ -92,6 +92,37 @@ Environment Variables and open a new terminal. Run `/doctor` in Hanoi to verify
 that Bash is detected. If it reports `executable not found in PATH`, Bash is
 not yet accessible to the Hanoi process.
 
+**Do not confuse Git Bash with Windows' `bash.exe` launcher.** In Command
+Prompt, check which executable a plain `bash` command starts:
+
+```cmd
+where bash
+```
+
+`C:\Windows\System32\bash.exe` is a WSL launcher, not Git Bash. A result
+under `Microsoft\WindowsApps` is also not the Git for Windows installation.
+To explicitly start Git Bash from Command Prompt, use:
+
+```cmd
+"C:\Program Files\Git\bin\bash.exe" --login -i
+```
+
+Then, in that Git Bash session, set the key and start the Windows executable
+from its directory:
+
+```bash
+export OPENAI_API_KEY="your_key_here"
+./hanoi.exe -tui
+```
+
+Git Bash normally reports `MINGW64_NT-...` or a similar Windows name for
+`uname -s`; `Linux` indicates a Linux environment. Starting a Windows executable
+from WSL can require explicit environment forwarding, even after `export`, and
+can otherwise cause `OPENAI_API_KEY is not set`. The Git Bash commands above
+pass the exported key directly to the Windows executable. `OPENAI_MODEL` and
+`OPENAI_BASE_URL` are optional; their defaults are `gpt-4o-mini` and
+`https://api.openai.com/v1/chat/completions`.
+
 ## Run
 
 Single prompt:
@@ -124,6 +155,12 @@ Inside TUI:
 
 - `Enter` sends
 - `Alt+Enter` inserts a newline
+- `Esc Esc` (twice consecutively within one second) stops the current model
+  request and active Bash/MCP tool call, and skips remaining tools and follow-up
+  requests. The session stays open; the prompt and any text already received
+  remain in the conversation. Wait for `Stopped.` before sending the next prompt.
+  Bash process trees are terminated; MCP calls receive cancellation (remote
+  servers must cooperate). Work already performed by tools is not undone.
 - `↑`/`↓` recalls earlier prompts and slash commands at the first/last input line;
   `Alt+↑`/`Alt+↓` recalls them from anywhere, preserving the current draft
   (session history, seeded from saved user messages when using `-memory`)

@@ -69,7 +69,7 @@ func TestChatScrollDuringStreaming(t *testing.T) {
 }
 
 func TestStreamRenderingIsBatched(t *testing.T) {
-	m := tuiModel{textarea: textarea.New(), viewport: viewport.New(60, 10)}
+	m := tuiModel{loading: true, textarea: textarea.New(), viewport: viewport.New(60, 10)}
 	updated, cmd := m.Update(chatChunkMsg{text: "hello"})
 	m = updated.(tuiModel)
 	if cmd == nil || !m.renderPending || m.streamRendered != "" {
