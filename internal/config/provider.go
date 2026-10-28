@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tailscale/hujson"
@@ -40,6 +41,7 @@ type Config struct {
 
 // Load reads provider settings using the same config discovery as MCP.
 func Load(explicit, selection string) (Config, error) {
+	legacySelection := selection
 	loadDotEnv(".env")
 	path, err := FindFile(explicit)
 	if err != nil {
@@ -63,6 +65,16 @@ func Load(explicit, selection string) (Config, error) {
 		}
 	}
 	cfg := Config{Providers: root.Providers}
+	if selection == "" {
+		selection = root.Model
+	}
+	if strings.HasPrefix(selection, "github-copilot/") {
+		cfg = cfg.WithCopilot()
+	}
+	if provider, ok := cfg.Providers["github-copilot"]; ok && len(provider.Models) == 0 {
+		provider.Models = map[string]Model{"gpt-4.1": {Name: "GPT-4.1"}, "gpt-5-mini": {Name: "GPT-5 mini"}}
+		cfg.Providers["github-copilot"] = provider
+	}
 	if len(cfg.Providers) != 0 {
 		for id, provider := range cfg.Providers {
 			if strings.TrimSpace(id) == "" || strings.Contains(id, "/") {
@@ -75,9 +87,6 @@ func Load(explicit, selection string) (Config, error) {
 			}
 		}
 		if selection == "" {
-			selection = root.Model
-		}
-		if selection == "" {
 			models := cfg.ModelChoices()
 			if len(models) != 1 {
 				return Config{}, fmt.Errorf("set model to provider/model in the config or use -model provider/model")
@@ -87,6 +96,7 @@ func Load(explicit, selection string) (Config, error) {
 		return cfg.SelectModel(selection)
 	}
 	// Preserve the original environment-only configuration and full endpoint URL.
+	selection = legacySelection
 	cfg.APIKey, cfg.Model, cfg.BaseURL = os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), os.Getenv("OPENAI_BASE_URL")
 	if cfg.APIKey == "" {
 		return Config{}, fmt.Errorf("OPENAI_API_KEY is not set")
@@ -105,6 +115,9 @@ func Load(explicit, selection string) (Config, error) {
 
 // SelectModel resolves a selection without mutating the original configuration.
 func (cfg Config) SelectModel(selection string) (Config, error) {
+	if strings.HasPrefix(selection, "github-copilot/") {
+		cfg = cfg.WithCopilot()
+	}
 	if len(cfg.Providers) == 0 {
 		cfg.Model = selection
 		return cfg, nil
@@ -123,11 +136,14 @@ func (cfg Config) SelectModel(selection string) (Config, error) {
 		return cfg, fmt.Errorf("unknown provider; use provider/model from the provider section")
 	}
 	model, ok := provider.Models[modelID]
-	if !ok {
+	if !ok && providerID != "github-copilot" {
 		return cfg, fmt.Errorf("provider %s: unknown model %q", providerID, modelID)
 	}
+	if strings.TrimSpace(modelID) == "" {
+		return cfg, fmt.Errorf("provider %s: model ID is empty", providerID)
+	}
 	// Hanoi implements the OpenAI Chat Completions protocol, not AI SDK adapters.
-	if provider.NPM != "" && provider.NPM != "@ai-sdk/openai-compatible" && provider.NPM != "@ai-sdk/openai" {
+	if provider.NPM != "" && provider.NPM != "@ai-sdk/openai-compatible" && provider.NPM != "@ai-sdk/openai" && !(providerID == "github-copilot" && provider.NPM == "@ai-sdk/github-copilot") {
 		return cfg, fmt.Errorf("provider %s: unsupported adapter; use an OpenAI-compatible provider", providerID)
 	}
 	baseURL, err := ExpandEnv(provider.Options.BaseURL)
@@ -136,6 +152,9 @@ func (cfg Config) SelectModel(selection string) (Config, error) {
 	}
 	if baseURL == "" && providerID == "openai" {
 		baseURL = "https://api.openai.com/v1"
+	}
+	if baseURL == "" && providerID == "github-copilot" {
+		baseURL = "https://api.githubcopilot.com"
 	}
 	endpoint, err := chatEndpoint(baseURL)
 	if err != nil {
@@ -161,9 +180,45 @@ func (cfg Config) SelectModel(selection string) (Config, error) {
 	} else {
 		cfg.Model = modelID
 	}
+	if providerID == "github-copilot" && copilotResponses(cfg.Model) && !strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/chat/completions") {
+		u, _ := url.Parse(endpoint)
+		u.Path = strings.TrimSuffix(u.Path, "/chat/completions")
+		if !strings.HasSuffix(u.Path, "/responses") {
+			u.Path += "/responses"
+		}
+		endpoint = u.String()
+	}
 	cfg.Provider, cfg.ModelKey = providerID, modelID
 	cfg.APIKey, cfg.BaseURL, cfg.Headers = key, endpoint, headers
 	return cfg, nil
+}
+
+// WithCopilot adds the built-in provider without changing an existing catalog.
+func (cfg Config) WithCopilot() Config {
+	if _, ok := cfg.Providers["github-copilot"]; ok {
+		return cfg
+	}
+	providers := make(map[string]Provider, len(cfg.Providers)+1)
+	for id, provider := range cfg.Providers {
+		providers[id] = provider
+	}
+	providers["github-copilot"] = Provider{Name: "GitHub Copilot", Models: map[string]Model{"gpt-4.1": {Name: "GPT-4.1"}, "gpt-5-mini": {Name: "GPT-5 mini"}}}
+	cfg.Providers = providers
+	return cfg
+}
+
+// copilotResponses follows Copilot's model routing when no endpoint is specified.
+func copilotResponses(model string) bool {
+	if strings.HasPrefix(model, "grok-") || strings.HasPrefix(model, "mai-code-") {
+		return true
+	}
+	if !strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "gpt-5-mini") {
+		return false
+	}
+	major := strings.SplitN(strings.TrimPrefix(model, "gpt-"), ".", 2)[0]
+	major = strings.SplitN(major, "-", 2)[0]
+	n, _ := strconv.Atoi(major)
+	return n >= 5
 }
 
 func chatEndpoint(baseURL string) (string, error) {

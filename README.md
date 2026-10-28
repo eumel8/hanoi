@@ -10,6 +10,7 @@ Basic AI harness in Go.
 - config via `.env`
 - provider override via `OPENAI_BASE_URL`
 - multiple OpenAI-compatible providers in `hanoi.json[c]`, with CLI and TUI model selection
+- GitHub Copilot provider with OAuth2 device login in the CLI and TUI
 - works as a simple OpenAI-compatible harness
 - includes OpenAI-style tool calling with a local `bash` tool
 - optional API logging with `-log <file>`
@@ -175,6 +176,7 @@ Inside TUI:
 - `/save` writes memory to disk
 - `/model <provider/model>` switches provider and model (`/model <name>` switches within the active provider)
 - `/providers`, `/models`, or `/model` opens the provider/model picker
+- `/connect github-copilot` logs in to GitHub Copilot; `/logout github-copilot` removes its local login
 - `/system <text>` sets the system prompt
 - `/mcps` opens MCP server management
 - `/trace` or `Ctrl+T` toggles the live trace timeline, including while a response is running;
@@ -526,7 +528,75 @@ otherwise `model` or `-model` is required.
 - Hanoi uses OpenAI Chat Completions for all providers. `npm` may be omitted,
   `@ai-sdk/openai-compatible`, or `@ai-sdk/openai`; it is a compatibility marker,
   not an installed adapter. Native Anthropic, Bedrock, and other API protocols,
-  OpenCode's credential store, and provider OAuth are not supported.
+  and OpenCode's credential store are not supported. GitHub Copilot has built-in
+  OAuth support as described below.
+
+### GitHub Copilot (OAuth2)
+
+Log in with GitHub's OAuth2 Device Authorization flow, using the same public
+OAuth client as OpenCode:
+
+```bash
+go run . -auth github-copilot
+go run . -model github-copilot/gpt-4.1 "Hello"
+go run . -tui -model github-copilot/gpt-4.1
+```
+
+Hanoi displays a GitHub verification URL and a one-time code and opens the
+browser. Enter the code and authorize access. No API key, client secret, or
+localhost callback is required. `Ctrl+C` cancels CLI login. The GitHub account
+must have Copilot access; model availability depends on the account and plan.
+
+To make Copilot the default, set the top-level model in `hanoi.json`:
+
+```json
+{
+  "model": "github-copilot/gpt-4.1",
+  "provider": {
+    "github-copilot": {
+      "name": "GitHub Copilot",
+      "models": {
+        "gpt-4.1": { "name": "GPT-4.1" },
+        "gpt-5-mini": { "name": "GPT-5 mini" },
+        "gpt-6.1-sol": { "name": "GPT-6.1 Sol" }
+      }
+    }
+  }
+}
+```
+
+The provider section is optional when using `-model github-copilot/<model>` or
+a top-level Copilot model. The built-in picker offers `gpt-4.1` and `gpt-5-mini`;
+configure additional model IDs for the picker or select them directly using
+`/model github-copilot/<model>`. The model list is not downloaded automatically.
+Copilot supports Hanoi's Chat Completions and Responses protocols: GPT-5 and
+newer (except `gpt-5-mini`), Grok, and MAI Code are routed to `/responses`;
+other models use `/chat/completions`. Models that require native Anthropic
+Messages are not supported by this integration.
+
+In the TUI use `/connect github-copilot`, or press `a` in `/providers`. The code
+and URL remain visible while waiting; `Esc` cancels. After connecting, select a
+Copilot model. `/doctor provider` uses the saved OAuth session too. Requests
+include Copilot's API version, intent and initiator headers, distinguishing user
+prompts from agent/tool follow-up requests. Hanoi uses the account-specific API
+endpoint reported by GitHub, falling back to `https://api.githubcopilot.com`.
+An explicit `options.baseURL` overrides this endpoint. A full `/chat/completions`
+or `/responses` URL also overrides automatic model routing.
+
+The GitHub OAuth token is stored separately from project configuration under
+`os.UserConfigDir()/hanoi/provider-oauth/github-copilot.json` (normally
+`~/.config/hanoi/provider-oauth/github-copilot.json` on Linux). The directory uses
+`0700`, the file uses `0600`, and writes are atomic. Later requests reuse the
+saved login; OAuth responses and credentials are not written to the API log.
+If GitHub expires or revokes the token, log in again. Hanoi does not read or
+modify OpenCode's credentials. This flow currently supports GitHub.com accounts.
+
+```bash
+go run . -logout github-copilot
+```
+
+Alternatively use `/logout github-copilot` or press `l` in `/providers`. Logout
+deletes the local session; it does not revoke the authorization on GitHub.
 
 Without a `provider` section, the original `OPENAI_API_KEY`, `OPENAI_MODEL`, and
 `OPENAI_BASE_URL` settings still work. `OPENAI_BASE_URL` continues to mean the
