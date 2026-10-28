@@ -7,7 +7,10 @@ import (
 )
 
 func (m tuiModel) providerView() string {
-	lines := []string{headStyle.Render("Providers and models"), "↑/↓ select · Enter activate · Esc close", ""}
+	lines := []string{headStyle.Render("Providers and models"), "↑/↓ select · Enter activate · a Copilot login · l Copilot logout · Esc close", ""}
+	if m.providerAuthInfo != "" {
+		lines = append(lines, m.providerAuthInfo, "")
+	}
 	choices := m.cfg.ModelChoices()
 	if len(choices) == 0 {
 		lines = append(lines, "No providers configured; using OPENAI_* environment settings.", "Add a provider section to hanoi.json to configure multiple providers.")
@@ -37,6 +40,13 @@ func (m tuiModel) providerView() string {
 func (m tuiModel) updateProviderMenu(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	choices := m.cfg.ModelChoices()
 	switch key.String() {
+	case "a":
+		return m.startProviderAuth()
+	case "l":
+		m.providerAuthInfo = "GitHub Copilot logged out locally."
+		if err := logoutCopilot(); err != nil {
+			m.providerAuthInfo = err.Error()
+		}
 	case "esc", "q":
 		m.providersOpen = false
 	case "up", "k":

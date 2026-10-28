@@ -114,11 +114,9 @@ func probeProvider(cfg config) doctor.Check {
 		return check
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-	for name, value := range cfg.Headers {
-		req.Header.Set(name, value)
+	if err := authorizeProviderRequest(cfg, req, payload); err != nil {
+		check.Detail = "provider authentication unavailable; use /connect github-copilot for Copilot"
+		return check
 	}
 	client := *http.DefaultClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

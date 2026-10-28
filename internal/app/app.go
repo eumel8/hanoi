@@ -149,6 +149,9 @@ type tuiModel struct {
 	doctorOpen     bool
 	doctorBusy     bool
 	doctorText     string
+
+	providerAuthCancel context.CancelFunc
+	providerAuthInfo   string
 }
 
 var (
@@ -173,11 +176,16 @@ func Run(version string) error {
 	configPath := flag.String("config", "", "config file (default: hanoi.json[c] or opencode.json[c])")
 	model := flag.String("model", "", "model to use (provider/model or legacy model name)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	authProvider := flag.String("auth", "", "log in to a provider (github-copilot)")
+	logoutProvider := flag.String("logout", "", "delete a provider login (github-copilot)")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("hanoi " + version)
 		return nil
+	}
+	if *authProvider != "" || *logoutProvider != "" {
+		return runProviderAuth(*authProvider, *logoutProvider)
 	}
 
 	cfg, err := loadConfig(*configPath, *model)
@@ -295,6 +303,9 @@ func runTUI(cfg config, memoryName string) error {
 	if model, ok := final.(tuiModel); ok && model.chatCancel != nil {
 		model.chatCancel()
 	}
+	if model, ok := final.(tuiModel); ok && model.providerAuthCancel != nil {
+		model.providerAuthCancel()
+	}
 	return runErr
 }
 
@@ -304,6 +315,16 @@ func (m tuiModel) Init() tea.Cmd {
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case copilotLoginStartedMsg:
+		if msg.err != nil {
+			m.endProviderAuth(msg.err)
+			return m, nil
+		}
+		m.providerAuthInfo = "Open " + msg.device.VerificationURI + " and enter code: " + msg.device.UserCode + "\nWaiting for GitHub authorization… Esc cancels."
+		return m, finishCopilotLoginCmd(msg.ctx, msg.device)
+	case copilotLoginFinishedMsg:
+		m.endProviderAuth(msg.err)
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -314,6 +335,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC {
+			if m.providerAuthCancel != nil {
+				m.providerAuthCancel()
+			}
 			if m.chatCancel != nil {
 				m.chatCancel()
 			}
@@ -337,6 +361,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastEscape = time.Time{}
 		}
 
+		if m.providerAuthCancel != nil {
+			if msg.String() == "esc" {
+				m.providerAuthCancel()
+			}
+			return m, nil
+		}
 		if m.mcpBusy {
 			if msg.String() == "esc" && m.cfg.MCP != nil {
 				m.cfg.MCP.CancelAuth()
@@ -718,12 +748,30 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.providersOpen, m.err = true, ""
 		m.textarea.SetValue("")
 		return m, nil
+	case "/connect":
+		m.textarea.SetValue("")
+		if arg != "" && arg != "github-copilot" {
+			m.err = "usage: /connect github-copilot"
+			return m, nil
+		}
+		return m.startProviderAuth()
+	case "/logout":
+		m.textarea.SetValue("")
+		if arg != "github-copilot" {
+			m.err = "usage: /logout github-copilot"
+			return m, nil
+		}
+		m.err = "GitHub Copilot logged out locally."
+		if err := logoutCopilot(); err != nil {
+			m.err = err.Error()
+		}
+		return m, nil
 	case "/system":
 		m.system = arg
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "Commands: /clear /save /model [provider/model] /providers /models /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		m.err = "Commands: /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
 		return m, nil
 	case "/doctor":
 		if arg != "" && arg != "provider" {
@@ -830,12 +878,9 @@ func sendChatRequest(cfg config, payload []byte) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
 	req.Header.Set("Content-Type", "application/json")
-	for name, value := range cfg.Headers {
-		req.Header.Set(name, value)
+	if err := authorizeProviderRequest(cfg, req, payload); err != nil {
+		return nil, err
 	}
 	if cfg.Logger != nil {
 		cfg.Logger.Printf("request body=%s", payload)
