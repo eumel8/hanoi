@@ -36,9 +36,15 @@ func RunBashContext(ctx context.Context, rawArgs string) (string, error) {
 	configureBashProcess(cmd)
 	cmd.WaitDelay = time.Second
 	cmd.Dir = WorkDir()
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		return string(output), fmt.Errorf("bash command stopped: %w; use a narrower command or search only the saved tool-results directory", ctx.Err())
+	var capture outputCapture
+	cmd.Stdout, cmd.Stderr = &capture, &capture
+	err := cmd.Run()
+	output, captureErr := capture.result()
+	if captureErr != nil {
+		return "", captureErr
 	}
-	return string(output), err
+	if ctx.Err() != nil {
+		return output, fmt.Errorf("bash command stopped: %w; use a narrower command or search only the saved tool-results directory", ctx.Err())
+	}
+	return output, err
 }

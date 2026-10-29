@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,5 +116,44 @@ func TestBashToolWorkingDirectory(t *testing.T) {
 	want, err := filepath.EvalSymlinks(WorkDir())
 	if err != nil || strings.TrimSpace(output) != want {
 		t.Fatalf("working directory: got %q, want %q, err=%v", output, want, err)
+	}
+}
+
+func TestBashOutputSpillsWhileRunningAndCancels(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("TMP", os.Getenv("TMPDIR"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		output, err := RunBashContext(ctx, `{"command":"while :; do printf '%08000d' 0; done"}`)
+		if len(output) > maxToolOutputBytes || !strings.Contains(output, "Full output saved") {
+			done <- fmt.Errorf("unbounded or missing preview: %d bytes", len(output))
+			return
+		}
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		files, _ := filepath.Glob(filepath.Join(ResultsDir(), "result-*.txt"))
+		if len(files) > 0 {
+			info, err := os.Stat(files[0])
+			if err == nil && info.Size() > maxToolOutputBytes {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("output was not spilled while command was running")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("noisy process did not stop")
 	}
 }

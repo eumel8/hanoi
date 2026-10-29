@@ -60,6 +60,11 @@ func renderTrace(events []traceEvent) string {
 }
 
 func traceText(text string) string {
+	// Trace arguments/errors can include large provider payloads. Bound work
+	// before scanning controls; the recorder retains the original event.
+	if len(text) > 4096 {
+		text = text[:4096]
+	}
 	text = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
