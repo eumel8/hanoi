@@ -278,3 +278,35 @@ func TestCopilotBuiltInConfiguration(t *testing.T) {
 		t.Fatalf("switch: %s %v", cfg.Provider, err)
 	}
 }
+
+func TestCopilotSavedLoginStartup(t *testing.T) {
+	isolatedCopilotStore(t)
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_MODEL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	path := writeProviderTestConfig(t, `{}`)
+	if _, err := loadConfig(path, ""); !errors.Is(err, appconfig.ErrMissingAPIKey) {
+		t.Fatalf("expected missing credentials before login, got %v", err)
+	}
+	if err := saveCopilotSession(copilotSession{AccessToken: "saved-token"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path, "")
+	if err != nil || cfg.ModelReference() != "github-copilot/gpt-4.1" {
+		t.Fatalf("saved login startup: model=%s err=%v", cfg.ModelReference(), err)
+	}
+	if _, err := loadConfig(path, "explicit-model"); !errors.Is(err, appconfig.ErrMissingAPIKey) {
+		t.Fatalf("explicit model was overridden: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "openai-token")
+	cfg, err = loadConfig(path, "")
+	if err != nil || cfg.Provider != "" || cfg.APIKey != "openai-token" {
+		t.Fatalf("OpenAI credentials were overridden: %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "")
+	path = writeProviderTestConfig(t, `{"provider":{"local":{"options":{"baseURL":"http://localhost:11434/v1"},"models":{"model":{}}}}}`)
+	cfg, err = loadConfig(path, "")
+	if err != nil || cfg.ModelReference() != "local/model" {
+		t.Fatalf("configured provider was overridden: %v", err)
+	}
+}

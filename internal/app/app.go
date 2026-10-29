@@ -152,6 +152,8 @@ type tuiModel struct {
 
 	providerAuthCancel context.CancelFunc
 	providerAuthInfo   string
+	discoveryBusy      bool
+	discoveryInfo      string
 }
 
 var (
@@ -178,6 +180,7 @@ func Run(version string) error {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	authProvider := flag.String("auth", "", "log in to a provider (github-copilot)")
 	logoutProvider := flag.String("logout", "", "delete a provider login (github-copilot)")
+	listModels := flag.Bool("models", false, "discover and list available GitHub Copilot models")
 	flag.Parse()
 
 	if *showVersion {
@@ -186,6 +189,23 @@ func Run(version string) error {
 	}
 	if *authProvider != "" || *logoutProvider != "" {
 		return runProviderAuth(*authProvider, *logoutProvider)
+	}
+	if *listModels {
+		cfg, err := loadConfig(*configPath, "github-copilot/gpt-4.1")
+		if err != nil {
+			return err
+		}
+		models, err := discoverCopilotModels(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		cfg = cfg.withDiscoveredModels(models)
+		for _, choice := range cfg.ModelChoices() {
+			if strings.HasPrefix(choice, "github-copilot/") {
+				fmt.Printf("%s\t%s\n", choice, cfg.Providers["github-copilot"].Models[strings.TrimPrefix(choice, "github-copilot/")].Name)
+			}
+		}
+		return nil
 	}
 
 	cfg, err := loadConfig(*configPath, *model)
@@ -324,6 +344,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, finishCopilotLoginCmd(msg.ctx, msg.device)
 	case copilotLoginFinishedMsg:
 		m.endProviderAuth(msg.err)
+		if msg.err == nil {
+			return m.startModelDiscovery()
+		}
+		return m, nil
+	case discoveredModelsMsg:
+		m.discoveryBusy = false
+		if msg.err != nil {
+			m.discoveryInfo = "Model discovery: " + msg.err.Error() + ". Press r to retry."
+		} else {
+			m.cfg = m.cfg.withDiscoveredModels(msg.models)
+			m.providerCursor = 0
+			m.discoveryInfo = fmt.Sprintf("%d available Copilot models. Press r to refresh.", len(msg.models))
+		}
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -737,6 +770,8 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/model":
 		if arg == "" {
 			m.providersOpen, m.err = true, ""
+			m.textarea.SetValue("")
+			return m.startModelDiscovery()
 		} else if cfg, err := m.cfg.selectModel(arg); err != nil {
 			m.err = err.Error()
 		} else {
@@ -747,7 +782,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/providers", "/models":
 		m.providersOpen, m.err = true, ""
 		m.textarea.SetValue("")
-		return m, nil
+		return m.startModelDiscovery()
 	case "/connect":
 		m.textarea.SetValue("")
 		if arg != "" && arg != "github-copilot" {

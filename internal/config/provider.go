@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -13,9 +14,12 @@ import (
 )
 
 type Model struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Endpoint string `json:"-"` // Runtime endpoint advertised by model discovery.
 }
+
+var ErrMissingAPIKey = errors.New("OPENAI_API_KEY is not set")
 
 type Provider struct {
 	Name    string `json:"name"`
@@ -99,7 +103,7 @@ func Load(explicit, selection string) (Config, error) {
 	selection = legacySelection
 	cfg.APIKey, cfg.Model, cfg.BaseURL = os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), os.Getenv("OPENAI_BASE_URL")
 	if cfg.APIKey == "" {
-		return Config{}, fmt.Errorf("OPENAI_API_KEY is not set")
+		return Config{}, ErrMissingAPIKey
 	}
 	if selection != "" {
 		cfg.Model = selection
@@ -186,6 +190,13 @@ func (cfg Config) SelectModel(selection string) (Config, error) {
 		if !strings.HasSuffix(u.Path, "/responses") {
 			u.Path += "/responses"
 		}
+		endpoint = u.String()
+	}
+	base, _ := url.Parse(baseURL)
+	explicitEndpoint := strings.HasSuffix(strings.TrimRight(base.Path, "/"), "/chat/completions") || strings.HasSuffix(strings.TrimRight(base.Path, "/"), "/responses")
+	if providerID == "github-copilot" && model.Endpoint != "" && !explicitEndpoint {
+		u, _ := url.Parse(endpoint)
+		u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/chat/completions"), "/responses") + model.Endpoint
 		endpoint = u.String()
 	}
 	cfg.Provider, cfg.ModelKey = providerID, modelID

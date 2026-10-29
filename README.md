@@ -39,7 +39,21 @@ provider configuration and MCP implementation.
 
 ## Setup
 
-Create a `.env` file:
+For GitHub Copilot, log in once and start the TUI:
+
+```bash
+hanoi.exe -auth github-copilot
+hanoi.exe -tui
+```
+
+The saved Copilot login is used automatically when no other provider or OpenAI
+environment settings are selected. In the TUI, `/models` discovers available
+Copilot models; use `↑`/`↓` and `Enter` to activate one. `hanoi.exe -models`
+lists them directly in the terminal. See [Windows: install or update Hanoi](#windows-install-or-update-hanoi)
+for installation, and [GitHub Copilot (OAuth2)](#github-copilot-oauth2) for details.
+When running from source, replace `hanoi.exe` with `go run .`.
+
+For an OpenAI API key, create a `.env` file:
 
 ```bash
 OPENAI_API_KEY=your_key_here
@@ -108,8 +122,15 @@ To explicitly start Git Bash from Command Prompt, use:
 "C:\Program Files\Git\bin\bash.exe" --login -i
 ```
 
-Then, in that Git Bash session, set the key and start the Windows executable
-from its directory:
+Then, in that Git Bash session, log in to Copilot and start the Windows
+executable from its directory:
+
+```bash
+./hanoi.exe -auth github-copilot
+./hanoi.exe -tui
+```
+
+For OpenAI API-key authentication, set the key instead:
 
 ```bash
 export OPENAI_API_KEY="your_key_here"
@@ -123,6 +144,68 @@ can otherwise cause `OPENAI_API_KEY is not set`. The Git Bash commands above
 pass the exported key directly to the Windows executable. `OPENAI_MODEL` and
 `OPENAI_BASE_URL` are optional; their defaults are `gpt-4o-mini` and
 `https://api.openai.com/v1/chat/completions`.
+
+### Windows: install or update Hanoi
+
+After installing Git for Windows as described above, open Git Bash and create
+a directory for the executable:
+
+```bash
+mkdir -p ~/bin
+```
+
+Add it to `PATH` once, then reload your shell settings:
+
+```bash
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Download the latest Windows x64 release:
+
+```bash
+curl -fL -o ~/bin/hanoi.exe https://github.com/eumel8/hanoi/releases/latest/download/hanoi-windows-amd64.exe
+```
+
+On Windows ARM64, use `hanoi-windows-arm64.exe` in the URL instead.
+Available versions and their binaries are listed on the
+[releases page](https://github.com/eumel8/hanoi/releases).
+
+Make the file executable in Git Bash and check the installed version:
+
+```bash
+chmod +x ~/bin/hanoi.exe
+hanoi.exe -version
+```
+
+The output is `hanoi v<installed-version>`. To update, close running Hanoi
+instances and repeat the download command, which replaces `~/bin/hanoi.exe`.
+OAuth credentials are stored separately and remain available after updating.
+Model discovery requires a build that includes the discovery feature; check the
+release notes if your version does not recognize `-models`.
+
+Log in once with your GitHub Copilot account, then discover models and start:
+
+```bash
+hanoi.exe -auth github-copilot
+hanoi.exe -models
+hanoi.exe -tui
+```
+
+Follow the GitHub URL and enter the code shown by the login command. Subsequent
+starts need only `hanoi.exe -tui`. In the TUI, `/models` loads the account's
+available compatible models; select one with `↑`/`↓` and `Enter`, or press `r`
+to refresh the list. `/doctor` checks that the Bash tool is ready.
+
+To select a model explicitly, for example when other provider settings exist:
+
+```bash
+hanoi.exe -tui -model github-copilot/gpt-4.1
+```
+
+The commands above use Git Bash. In PowerShell, an executable in the current
+directory is started with `.\hanoi.exe`; the Git Bash executable directory must
+also be on `PATH` for Hanoi's Bash tool.
 
 ## Run
 
@@ -175,7 +258,7 @@ Inside TUI:
 - `/clear` resets the current conversation
 - `/save` writes memory to disk
 - `/model <provider/model>` switches provider and model (`/model <name>` switches within the active provider)
-- `/providers`, `/models`, or `/model` opens the provider/model picker
+- `/providers`, `/models`, or `/model` opens the provider/model picker and discovers Copilot models; `r` refreshes the list
 - `/connect github-copilot` logs in to GitHub Copilot; `/logout github-copilot` removes its local login
 - `/system <text>` sets the system prompt
 - `/mcps` opens MCP server management
@@ -547,7 +630,10 @@ browser. Enter the code and authorize access. No API key, client secret, or
 localhost callback is required. `Ctrl+C` cancels CLI login. The GitHub account
 must have Copilot access; model availability depends on the account and plan.
 
-To make Copilot the default, set the top-level model in `hanoi.json`:
+With a saved Copilot login and no other provider or OpenAI environment settings,
+`hanoi.exe -tui` defaults to `github-copilot/gpt-4.1`. To choose a different
+startup model or use Copilot alongside other providers, set the top-level model
+in `hanoi.json` (use a model ID from `/models` or `hanoi.exe -models`):
 
 ```json
 {
@@ -566,10 +652,28 @@ To make Copilot the default, set the top-level model in `hanoi.json`:
 ```
 
 The provider section is optional when using `-model github-copilot/<model>` or
-a top-level Copilot model. The built-in picker offers `gpt-4.1` and `gpt-5-mini`;
-configure additional model IDs for the picker or select them directly using
-`/model github-copilot/<model>`. The model list is not downloaded automatically.
-Copilot supports Hanoi's Chat Completions and Responses protocols: GPT-5 and
+a top-level Copilot model. `/models`, `/providers`, and `/model` automatically
+load the available models from Copilot using your saved login. Discovery also
+runs after a successful TUI login. Use `↑`/`↓` and `Enter` to select a model;
+the list scrolls to keep the selection visible. Press `r` to refresh it.
+
+List available models from the CLI without sending a chat request:
+
+```bash
+hanoi.exe -models
+go run . -models
+```
+
+Discovery displays enabled chat models with a supported Chat Completions or
+Responses endpoint, excluding models that explicitly disable tool calling.
+It uses the account-specific API endpoint and preserves configured aliases and
+display names for available models. The remote catalog supplies the correct
+API route. No project configuration is rewritten. If discovery fails, the
+existing list remains available and an error is shown; press `r` to retry.
+Before discovery, the built-in picker offers `gpt-4.1` and `gpt-5-mini`.
+You can still select model IDs directly with `/model github-copilot/<model>`.
+
+Without catalog metadata, Copilot uses the following routing: GPT-5 and
 newer (except `gpt-5-mini`), Grok, and MAI Code are routed to `/responses`;
 other models use `/chat/completions`. Models that require native Anthropic
 Messages are not supported by this integration.
