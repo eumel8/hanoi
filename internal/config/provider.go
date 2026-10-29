@@ -14,8 +14,9 @@ import (
 )
 
 type Model struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Endpoint string `json:"-"` // Runtime endpoint advertised by model discovery.
 }
 
 var ErrMissingAPIKey = errors.New("OPENAI_API_KEY is not set")
@@ -189,6 +190,13 @@ func (cfg Config) SelectModel(selection string) (Config, error) {
 		if !strings.HasSuffix(u.Path, "/responses") {
 			u.Path += "/responses"
 		}
+		endpoint = u.String()
+	}
+	base, _ := url.Parse(baseURL)
+	explicitEndpoint := strings.HasSuffix(strings.TrimRight(base.Path, "/"), "/chat/completions") || strings.HasSuffix(strings.TrimRight(base.Path, "/"), "/responses")
+	if providerID == "github-copilot" && model.Endpoint != "" && !explicitEndpoint {
+		u, _ := url.Parse(endpoint)
+		u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/chat/completions"), "/responses") + model.Endpoint
 		endpoint = u.String()
 	}
 	cfg.Provider, cfg.ModelKey = providerID, modelID

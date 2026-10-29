@@ -7,15 +7,31 @@ import (
 )
 
 func (m tuiModel) providerView() string {
-	lines := []string{headStyle.Render("Providers and models"), "↑/↓ select · Enter activate · a Copilot login · l Copilot logout · Esc close", ""}
+	lines := []string{headStyle.Render("Providers and models"), "↑/↓ select · Enter activate · r refresh models · a Copilot login · l Copilot logout · Esc close", ""}
 	if m.providerAuthInfo != "" {
 		lines = append(lines, m.providerAuthInfo, "")
+	}
+	if m.discoveryInfo != "" {
+		lines = append(lines, m.discoveryInfo, "")
 	}
 	choices := m.cfg.ModelChoices()
 	if len(choices) == 0 {
 		lines = append(lines, "No providers configured; using OPENAI_* environment settings.", "Add a provider section to hanoi.json to configure multiple providers.")
 	}
-	for index, choice := range choices {
+	// Keep the selected row visible even with a large remote catalog.
+	visible := len(choices)
+	if m.height > 0 {
+		visible = max(1, m.height-14-strings.Count(m.providerAuthInfo, "\n"))
+	}
+	start := max(0, m.providerCursor-visible/2)
+	if start+visible > len(choices) {
+		start = max(0, len(choices)-visible)
+	}
+	if start > 0 {
+		lines = append(lines, "↑ more models")
+	}
+	for index := start; index < len(choices) && index < start+visible; index++ {
+		choice := choices[index]
 		providerID, modelID, _ := strings.Cut(choice, "/")
 		provider := m.cfg.Providers[providerID]
 		row := choice
@@ -34,12 +50,17 @@ func (m tuiModel) providerView() string {
 		}
 		lines = append(lines, prefix+row)
 	}
+	if start+visible < len(choices) {
+		lines = append(lines, "↓ more models")
+	}
 	return strings.Join(lines, "\n")
 }
 
 func (m tuiModel) updateProviderMenu(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	choices := m.cfg.ModelChoices()
 	switch key.String() {
+	case "r", "ctrl+r":
+		return m.startModelDiscovery()
 	case "a":
 		return m.startProviderAuth()
 	case "l":
