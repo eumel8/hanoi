@@ -6,7 +6,7 @@ Basic AI harness in Go.
 
 - CLI prompt interface
 - streaming output with `-stream`
-- conversation memory with `-memory`
+- automatically saved TUI sessions with `/sessions`, `/new`, and CLI memory with `-memory`
 - config via `.env`
 - provider override via `OPENAI_BASE_URL`
 - multiple OpenAI-compatible providers in `hanoi.json[c]`, with CLI and TUI model selection
@@ -256,6 +256,8 @@ Inside TUI:
   with wrapping adjusted to the terminal width and colors for light or dark backgrounds
 - `/exit` or `/quit` ends the session
 - `/clear` resets the current conversation
+- `/new [name]` saves the current conversation and starts a fresh session
+- `/sessions` opens saved conversations (newest first); `/sessions <name>` resumes one directly
 - `/save` writes memory to disk
 - `/model <provider/model>` switches provider and model (`/model <name>` switches within the active provider)
 - `/providers`, `/models`, or `/model` opens the provider/model picker and discovers Copilot models; `r` refreshes the list
@@ -741,7 +743,47 @@ Example prompt:
 go run . "Nutze das bash tool und gib mir die Dateien im aktuellen Ordner aus"
 ```
 
-Conversation memory is stored in:
+## Sessions and conversation memory
+
+The TUI automatically saves conversations in the current workspace's `.hanoi/`
+directory. You can start with `hanoi.exe -tui` without choosing a memory name.
+An unnamed conversation receives a unique timestamp-based session ID when you
+send its first message. User messages are saved before the model request;
+completed responses and partial responses stopped with `Esc Esc` are saved too.
+Empty startup conversations are not written unless you explicitly use `/new`
+or `/save`.
+
+- `/sessions`: open the session picker, sorted by most recently saved. Entries
+  show the first user message as a title, session ID, last update and message count.
+- `↑`/`↓`, `Enter`: select and resume a conversation. `Esc` closes the picker;
+  `n` starts a new session.
+- `/sessions <name>`: resume a saved session directly.
+- `/new [name]`: save the current conversation and start a fresh session. Omit
+  the name for an automatic ID. Existing sessions are never overwritten by `/new`.
+- `/save`: save the current session explicitly.
+- `/clear`: empty the active session, including its saved conversation. Use
+  `/new` when you want to keep the previous conversation.
+
+Switching restores conversation messages and prompt-recall history, and resets
+the system-prompt override and session trace view. The selected provider/model
+stays active. Stop an in-progress response before switching sessions. A failed
+save or unreadable destination leaves the current conversation open.
+
+Existing `-memory chat1` files appear in `/sessions` and remain compatible with
+CLI usage:
+
+```bash
+hanoi.exe -tui -memory chat1
+hanoi.exe -memory chat1 "Continue this conversation"
+```
+
+CLI prompts are persisted only when `-memory` is supplied. Session names must be
+plain filenames without path separators. Files use the existing JSON message
+array format; saves use temporary files with `0600` permissions and rename them
+into place. New `.hanoi/` directories are created with `0700`. Conversations
+include prompt and response content, and are local to the launch directory.
+
+Storage location:
 
 ```bash
 .hanoi/

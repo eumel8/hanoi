@@ -45,7 +45,7 @@ func (m tuiModel) chatHeader() []string {
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
 	}
 	if m.memoryName != "" {
-		header = append(header, hintStyle.Render("memory: "+m.memoryName))
+		header = append(header, hintStyle.Render("session: "+m.memoryName))
 	}
 	if m.system != "" {
 		header = append(header, hintStyle.Render("system: "+m.system))

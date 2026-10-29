@@ -154,6 +154,11 @@ type tuiModel struct {
 	providerAuthInfo   string
 	discoveryBusy      bool
 	discoveryInfo      string
+
+	sessionsOpen  bool
+	sessionCursor int
+	sessions      []memorySession
+	autoSave      bool
 }
 
 var (
@@ -301,6 +306,7 @@ func runTUI(cfg config, memoryName string) error {
 	m := tuiModel{
 		cfg:        cfg,
 		memoryName: memoryName,
+		autoSave:   true,
 		messages:   messages,
 		textarea:   ta,
 		viewport:   viewport.New(70, 10),
@@ -413,6 +419,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.providersOpen {
 			return m.updateProviderMenu(msg)
 		}
+		if m.sessionsOpen {
+			return m.updateSessionMenu(msg)
+		}
 		if m.doctorOpen {
 			if msg.String() == "esc" {
 				m.doctorOpen = false
@@ -453,7 +462,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleSlashCommand(prompt)
 			}
 
+			if m.autoSave && m.memoryName == "" {
+				name, err := newMemoryName()
+				if err != nil {
+					m.err = err.Error()
+					return m, nil
+				}
+				m.memoryName = name
+			}
 			m.pendingMessage = appendMessage(m.messages, m.system, message{Role: "user", Content: prompt})
+			if m.memoryName != "" {
+				if err := saveMemory(m.memoryName, m.pendingMessage); err != nil {
+					m.err = fmt.Sprintf("save session: %v", err)
+					return m, nil
+				}
+			}
 			m.messages = append([]message{}, m.pendingMessage...)
 			m.textarea.SetValue("")
 			m.loading = true
@@ -552,7 +575,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		if !m.mcpOpen && !m.providersOpen && !m.mcpBusy {
+		if !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.mcpBusy {
 			// Explicitly handle scroll wheel events for WSL/Touchpad compatibility.
 			switch tea.MouseMsg(msg).Button {
 			case tea.MouseButtonWheelUp:
@@ -598,6 +621,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 			m.streaming = ""
 			m.messages = m.messages[:max(0, len(m.messages)-1)]
+			if m.memoryName != "" {
+				if err := saveMemory(m.memoryName, m.messages); err != nil {
+					m.err += fmt.Sprintf("; save session: %v", err)
+				}
+			}
 			m.rebuildHistory()
 			return m, nil
 		}
@@ -658,7 +686,9 @@ func (m tuiModel) View() string {
 	if m.mcpOpen {
 		body = m.mcpView()
 	}
-	if m.providersOpen {
+	if m.sessionsOpen {
+		body = m.sessionView()
+	} else if m.providersOpen {
 		body = m.providerView()
 	}
 
@@ -745,6 +775,32 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/exit", "/quit":
 		return m, tea.Quit
+	case "/new":
+		m.textarea.SetValue("")
+		if err := m.newSession(arg); err != nil {
+			m.err = err.Error()
+		}
+		return m, nil
+	case "/sessions":
+		m.textarea.SetValue("")
+		if m.loading {
+			m.err = "Stop the current response before switching sessions."
+			return m, nil
+		}
+		if arg != "" {
+			if err := m.switchSession(arg); err != nil {
+				m.err = err.Error()
+			}
+			return m, nil
+		}
+		var err error
+		m.sessions, err = listMemorySessions()
+		if err != nil {
+			m.err = err.Error()
+			return m, nil
+		}
+		m.sessionsOpen, m.sessionCursor, m.err = true, 0, ""
+		return m, nil
 	case "/clear":
 		m.messages = nil
 		m.streaming = ""
@@ -758,8 +814,12 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "/save":
 		if m.memoryName == "" {
-			m.err = "no memory name set; restart with -memory chat1"
-			return m, nil
+			name, err := newMemoryName()
+			if err != nil {
+				m.err = err.Error()
+				return m, nil
+			}
+			m.memoryName = name
 		}
 		if err := saveMemory(m.memoryName, m.messages); err != nil {
 			m.err = fmt.Sprintf("save memory: %v", err)
@@ -806,7 +866,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.err = ""
 		return m, nil
 	case "/help":
-		m.err = "Commands: /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		m.err = "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
 		return m, nil
 	case "/doctor":
 		if arg != "" && arg != "provider" {
@@ -1165,6 +1225,9 @@ func handleStream(body io.Reader, onChunk func(string)) (message, error) {
 }
 
 func loadMemory(name string) ([]message, error) {
+	if err := validateMemoryName(name); err != nil {
+		return nil, err
+	}
 	path := memoryPath(name)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1182,8 +1245,11 @@ func loadMemory(name string) ([]message, error) {
 }
 
 func saveMemory(name string, messages []message) error {
+	if err := validateMemoryName(name); err != nil {
+		return err
+	}
 	path := memoryPath(name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
@@ -1191,7 +1257,19 @@ func saveMemory(name string, messages []message) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	f, err := os.CreateTemp(filepath.Dir(path), ".session-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 func memoryPath(name string) string {
