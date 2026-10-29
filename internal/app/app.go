@@ -154,6 +154,7 @@ type tuiModel struct {
 	providerAuthInfo   string
 	discoveryBusy      bool
 	discoveryInfo      string
+	streamDisplayFull  bool
 
 	sessionsOpen  bool
 	sessionCursor int
@@ -490,6 +491,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activitySince = time.Now()
 			m.activityTicker = false
 			m.streaming = ""
+			m.streamDisplayFull = false
 			m.err = ""
 			m.userScrolled = false
 			m.rebuildHistory()
@@ -510,7 +512,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.loading || m.cancelling {
 			return m, nil
 		}
-		m.streaming += msg.text
+		if m.streamDisplayFull {
+			return m, nil
+		}
+		remaining := maxTUIDisplayBytes + 1 - len(m.streaming)
+		if remaining > 0 {
+			piece := msg.text
+			if len(piece) > remaining {
+				piece = piece[:remaining]
+			}
+			m.streaming += piece
+		}
 		if !m.renderPending {
 			m.renderPending = true
 			return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return streamRenderMsg{} })
@@ -571,6 +583,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.streamRendered = m.renderMarkdown(m.streaming)
+		m.streamDisplayFull = len(m.streaming) >= maxTUIDisplayBytes
 		m.refreshChat()
 		return m, nil
 
@@ -698,7 +711,7 @@ func (m tuiModel) View() string {
 		if activity == "" {
 			activity = "waiting for model..."
 		}
-		status = m.spinner.View() + " " + activity
+		status = m.spinner.View() + " " + tuiStatusText(activity, max(1, m.width-10))
 	}
 	if m.mcpBusy {
 		status = m.spinner.View() + " updating MCP servers..."
@@ -707,7 +720,11 @@ func (m tuiModel) View() string {
 		status = m.spinner.View() + " running diagnostics..."
 	}
 	if m.err != "" {
-		status = errStyle.Render(m.err)
+		if strings.HasPrefix(m.err, "Commands:") {
+			status = errStyle.Render(m.err)
+		} else {
+			status = errStyle.Render(tuiStatusText(m.err, max(1, m.width-6)))
+		}
 	}
 
 	content := strings.Join([]string{
@@ -728,11 +745,11 @@ func (m *tuiModel) rebuildHistory() {
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			m.history = append(m.history, userStyle.Render("you")+": "+msg.Content)
+			m.history = append(m.history, userStyle.Render("you")+": "+tuiDisplayText(msg.Content))
 		case "assistant":
 			m.history = append(m.history, botStyle.Render("assistant")+"\n"+m.renderMarkdown(msg.Content))
 		case "system":
-			m.history = append(m.history, hintStyle.Render("system: "+msg.Content))
+			m.history = append(m.history, hintStyle.Render("system: "+tuiDisplayText(msg.Content)))
 		}
 	}
 	if m.streaming != "" {
@@ -742,6 +759,10 @@ func (m *tuiModel) rebuildHistory() {
 }
 
 func (m *tuiModel) renderMarkdown(text string) string {
+	text = tuiDisplayText(text)
+	if len(text) > maxTUIMarkdownBytes {
+		return text
+	}
 	if m.markdown == nil {
 		style := "light"
 		if lipgloss.HasDarkBackground() {

@@ -737,6 +737,15 @@ an explicit truncation notice, and the absolute file path so it can use `bash` t
 or aggregate the full result. This applies to both MCP and Bash tools. Saved
 results remain available after exit; remove them when no longer needed.
 
+Bash output spills to a file as soon as the capture exceeds 32 KiB, keeping
+only a bounded preview in memory while the command is still running. Noisy
+commands remain subject to the same timeout and cancellation behavior.
+The TUI also bounds status/error lines and strips terminal control sequences
+from displayed content. Large responses use plain text beyond 8 KiB instead
+of repeatedly parsing Markdown, with a 32 KiB display preview. Completed full
+responses remain available in the session file; the preview limit only affects
+display. `Esc Esc` stops the current request/tool and `Ctrl+C` exits.
+
 Example prompt:
 
 ```bash

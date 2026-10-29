@@ -31,6 +31,10 @@ func toolArgsSummary(call toolCall) string {
 }
 
 func clipArgs(s string, limit int) string {
+	if len(s) > 4096 {
+		s = s[:4096]
+	}
+	s = stripTerminalControls(s)
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > limit {
 		return s[:limit] + "…"
@@ -48,7 +52,7 @@ func (m tuiModel) chatHeader() []string {
 		header = append(header, hintStyle.Render("session: "+m.memoryName))
 	}
 	if m.system != "" {
-		header = append(header, hintStyle.Render("system: "+m.system))
+		header = append(header, hintStyle.Render(tuiStatusText("system: "+m.system, max(20, m.width-6))))
 	}
 	if m.traceOpen {
 		header = append(header, headStyle.Render("Hanoi Trace · Ctrl+T / Esc returns to chat"))
