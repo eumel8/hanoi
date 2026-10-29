@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,6 +17,8 @@ type Model struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
+
+var ErrMissingAPIKey = errors.New("OPENAI_API_KEY is not set")
 
 type Provider struct {
 	Name    string `json:"name"`
@@ -99,7 +102,7 @@ func Load(explicit, selection string) (Config, error) {
 	selection = legacySelection
 	cfg.APIKey, cfg.Model, cfg.BaseURL = os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), os.Getenv("OPENAI_BASE_URL")
 	if cfg.APIKey == "" {
-		return Config{}, fmt.Errorf("OPENAI_API_KEY is not set")
+		return Config{}, ErrMissingAPIKey
 	}
 	if selection != "" {
 		cfg.Model = selection

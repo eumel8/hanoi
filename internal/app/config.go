@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
+	"os"
 
 	appconfig "hanoi/internal/config"
 	"hanoi/internal/trace"
@@ -60,6 +62,13 @@ func (cfg config) emitTrace(event traceEvent) {
 
 func loadConfig(explicit, selection string) (config, error) {
 	settings, err := appconfig.Load(explicit, selection)
+	// A saved Copilot login is the default when no provider or legacy model
+	// settings were selected. Explicit configuration always takes precedence.
+	if errors.Is(err, appconfig.ErrMissingAPIKey) && selection == "" && os.Getenv("OPENAI_MODEL") == "" && os.Getenv("OPENAI_BASE_URL") == "" {
+		if _, sessionErr := loadCopilotSession(); sessionErr == nil {
+			settings, err = appconfig.Load(explicit, "github-copilot/gpt-4.1")
+		}
+	}
 	if err != nil {
 		return config{}, err
 	}
