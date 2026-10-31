@@ -27,31 +27,93 @@ transcription and speech synthesis run locally. Only the resulting text is sent
 to the configured chat provider (including Copilot). Nothing records audio in
 the chat session.
 
-No Python is required. Install the native local executables `ffmpeg`, `ffplay`,
-`whisper-cli` (whisper.cpp), and `piper` on `PATH`. Download a
-whisper.cpp GGML multilingual model (for example `ggml-small.bin`) and a German
-Piper voice (`.onnx` **and** its matching `.onnx.json` beside it) once. Choose
-model files compatible with your installed binaries. All these downloads are
-one-time setup; speech works offline afterward.
+No Python is required. Hanoi's download contains **only Hanoi**. For voice,
+install `ffmpeg` (microphone), `ffplay` (playback), `whisper-cli`
+(transcription), and `piper` (speech synthesis) on the **same OS as Hanoi**.
+Download the two model files separately. The downloads require internet once;
+recording, transcription and playback then run locally.
 
-To list microphone names on Windows, run `ffmpeg -list_devices true -f dshow -i dummy`
-in PowerShell or Command Prompt (the command reports a missing input after listing
-devices). Use the exact audio device name shown there as `-voice-input`. On macOS,
-list audio device indices with `ffmpeg -f avfoundation -list_devices true -i ""`
-and use the microphone index (often `0`).
+### Windows setup (x64, PowerShell)
 
-Start the native executable (adjust paths and device name):
+1. Download FFmpeg from the [Windows builds linked by FFmpeg](https://ffmpeg.org/download.html#build-windows)
+   (for example gyan.dev, **full build**, not an essentials build without
+   `ffplay`). Extract it and add its `bin` folder, containing both `ffmpeg.exe`
+   and `ffplay.exe`, to your Windows user `Path`.
+2. Download a Windows x64 **binary archive** containing `whisper-cli.exe` from
+   [whisper.cpp's pre-release builds](https://github.com/ggml-org/whisper.cpp/releases)
+   (look for `whisper-bin-x64.zip`; the regular source-only releases may have
+   no executable). Extract it and add the folder containing `whisper-cli.exe`
+   to `Path`. Keep any DLLs from the archive beside the executable.
+3. Download [Piper's Windows amd64 ZIP](https://github.com/rhasspy/piper/releases/latest)
+   (`piper_windows_amd64.zip`), extract it and add the folder containing
+   `piper.exe` to `Path`. Keep its bundled libraries and `espeak-ng-data` in
+   place. This standalone release works without Python; the newer
+   [OHF-Voice Piper](https://github.com/OHF-Voice/piper1-gpl) primarily ships
+   Python packages and is not the ZIP used here.
+4. Download the multilingual [`ggml-base.bin` Whisper model](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin)
+   to `C:\models\ggml-base.bin` (or use [other multilingual GGML models](https://huggingface.co/ggerganov/whisper.cpp/tree/main),
+   such as `ggml-small.bin`). Do **not** choose a `.en` model for German.
+   Download the German Piper voice
+   [model `de_DE-thorsten-medium.onnx`](https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx)
+   **and** its [matching config `de_DE-thorsten-medium.onnx.json`](https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json)
+   into `C:\models\`. The `.onnx.json` name must match the `.onnx` name plus
+   `.json`. See [other German voices](https://github.com/rhasspy/piper/blob/master/VOICES.md#german-de_de-deutsch).
+
+Open a **new** PowerShell session after editing `Path` and check:
 
 ```powershell
-.\hanoi-windows-amd64.exe -tui -voice -voice-input "Microphone (USB Audio Device)" -voice-whisper-model C:\models\ggml-small.bin -voice-piper-model C:\models\de_DE-voice.onnx
+Get-Command ffmpeg, ffplay, whisper-cli, piper
+Test-Path C:\models\ggml-base.bin
+Test-Path C:\models\de_DE-thorsten-medium.onnx
+Test-Path C:\models\de_DE-thorsten-medium.onnx.json
 ```
 
-On macOS, use `./hanoi-darwin-arm64 -tui -voice -voice-input 0 ...` (or the
-amd64 binary on Intel). Press **F4** to start
-recording, **F4** again to stop; the transcript appears in the input field for
-review and **Enter** sends it. Completed model answers are read aloud. A new
-recording stops playback. Voice errors appear in the TUI status line. Check
-microphone permission for your terminal in the OS privacy settings. Audio is
+Each check should find its executable or print `True`. In the same PowerShell
+session, list microphone names with `ffmpeg -list_devices true -f dshow -i dummy`
+(it reports a missing input **after** listing the devices). Copy the exact name
+of your audio input device for `-voice-input`. Start the **Windows Hanoi EXE**
+from this PowerShell session:
+
+```powershell
+.\hanoi-windows-amd64.exe -tui -voice -voice-input "Microphone (USB Audio Device)" -voice-whisper-model C:\models\ggml-base.bin -voice-piper-model C:\models\de_DE-thorsten-medium.onnx
+```
+
+The example microphone name is a placeholder. If your audio tools are not on
+`Path`, put their directories on `Path` before launching Hanoi; installing
+them inside WSL does not make them available to `hanoi-windows-amd64.exe`.
+
+### macOS setup
+
+Install [Homebrew](https://brew.sh/) if needed. Install `ffmpeg` (including
+`ffplay`) via `brew install ffmpeg`. Build the standalone `whisper-cli` from
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp#quick-start) with CMake:
+
+```bash
+brew install ffmpeg cmake
+git clone https://github.com/ggml-org/whisper.cpp.git
+cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build whisper.cpp/build --config Release -j 4
+```
+
+Put `whisper.cpp/build/bin` on `PATH`. Download the same multilingual Whisper
+GGML model and the same two Piper voice files linked above into, for example,
+`~/models/`. Download the standalone [Piper macOS archive](https://github.com/rhasspy/piper/releases/latest)
+(`piper_macos_aarch64.tar.gz` for Apple Silicon or `piper_macos_x64.tar.gz` for
+Intel), extract it, and put the directory containing `piper` on `PATH` while
+keeping its bundled data and libraries together. Verify with
+`command -v ffmpeg ffplay whisper-cli piper`. List microphone device indices
+with `ffmpeg -f avfoundation -list_devices true -i ""` and choose the audio
+input index (often `0`). Then run:
+
+```bash
+./hanoi-darwin-arm64 -tui -voice -voice-input 0 -voice-whisper-model "$HOME/models/ggml-base.bin" -voice-piper-model "$HOME/models/de_DE-thorsten-medium.onnx"
+```
+
+Use `hanoi-darwin-amd64` on Intel. With either platform, press **F4** to start
+recording and **F4** again to stop; the transcript appears in the input field
+for review and **Enter** sends it. Completed model answers are read aloud. A
+new recording stops playback. Voice errors appear in the TUI status line.
+Allow microphone access for your terminal in the OS privacy settings. Audio is
 stored temporarily and removed when Hanoi exits.
 
 ## Code structure
