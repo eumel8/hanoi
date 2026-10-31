@@ -17,6 +17,44 @@ Basic AI harness in Go.
 - live Hanoi Trace timeline in the TUI and optional structured JSONL export with `-trace <file>`
 - MCP tools from local and remote servers, with OpenCode-compatible config and `/mcps` management
 - tag-based `-version` output and GitHub Actions builds for Linux, macOS, and Windows
+- optional local speech input/output in the native Windows and macOS TUI
+
+## Local voice (Windows and macOS)
+
+Voice is optional. Run the **native** Hanoi executable (`hanoi.exe` on Windows,
+`hanoi` on macOS), not the Linux executable in WSL. Microphone capture,
+transcription and speech synthesis run locally. Only the resulting text is sent
+to the configured chat provider (including Copilot). Nothing records audio in
+the chat session.
+
+Install Python 3 and the helper's Python dependencies in the same environment:
+
+```bash
+python -m pip install numpy sounddevice soundfile
+```
+
+On macOS use `python3` if `python` is unavailable. Install the local
+`whisper-cli` (whisper.cpp) and `piper` executables on `PATH`. Download a
+whisper.cpp GGML multilingual model (for example `ggml-small.bin`) and a German
+Piper voice (`.onnx` **and** its matching `.onnx.json` beside it) once. Choose
+model files compatible with your installed binaries. All these downloads are
+one-time setup; speech works offline afterward.
+
+From the project directory (adjust paths to your model files):
+
+```bash
+hanoi.exe -tui -voice -voice-whisper-model path/to/ggml-small.bin -voice-piper-model path/to/de_DE-voice.onnx
+```
+
+Use `./hanoi` on macOS. Run from the repository directory to use the default
+`voice/voice.py`. Windows/macOS CI artifacts include this helper beside the
+binary: keep the `voice/` directory and start Hanoi from the extracted directory,
+or pass `-voice-helper path/to/voice.py`. Set
+`-voice-python` when the Python executable is elsewhere. Press **F4** to start
+recording, **F4** again to stop; the transcript appears in the input field for
+review and **Enter** sends it. Completed model answers are read aloud. A new
+recording stops playback. Voice errors appear in the TUI status line. Check
+microphone permission for Python/your terminal in the OS privacy settings.
 
 ## Code structure
 

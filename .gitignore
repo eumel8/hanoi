@@ -3,3 +3,4 @@ hanoi
 hanoi.json
 *.log
 .hanoi/tool-results/
+__pycache__/

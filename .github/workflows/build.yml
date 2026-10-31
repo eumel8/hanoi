@@ -22,6 +22,8 @@ jobs:
           cache: true
       - run: go test -race ./... -timeout 90s
       - run: go vet ./...
+      - name: Check voice helper syntax
+        run: python -c "import ast, pathlib; ast.parse(pathlib.Path('voice/voice.py').read_text(encoding='utf-8'))"
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -29,9 +31,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Build every target only for tags and manually dispatched runs.
+        # Build every target for releases, manual runs, and the voice feature branch.
         include: ${{ fromJSON(
-          (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+          (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/feature/local-voice')
           && '[
             {"runner":"ubuntu-latest","goos":"linux","goarch":"amd64","extension":""},
             {"runner":"ubuntu-latest","goos":"linux","goarch":"arm64","extension":""},
@@ -88,6 +90,10 @@ jobs:
               f"{checksum}  {binary.name}\n", encoding="utf-8"
           )
           PY
+          if [ "$GOOS" = windows ] || [ "$GOOS" = darwin ]; then
+            mkdir -p dist/voice
+            cp voice/voice.py dist/voice/voice.py
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: hanoi-${{ matrix.goos }}-${{ matrix.goarch }}

@@ -51,6 +51,9 @@ func (m tuiModel) chatHeader() []string {
 	if m.memoryName != "" {
 		header = append(header, hintStyle.Render("session: "+m.memoryName))
 	}
+	if m.voice != nil {
+		header = append(header, hintStyle.Render("voice: F4 start/stop recording · Enter sends transcript"))
+	}
 	if m.system != "" {
 		header = append(header, hintStyle.Render(tuiStatusText("system: "+m.system, max(20, m.width-6))))
 	}

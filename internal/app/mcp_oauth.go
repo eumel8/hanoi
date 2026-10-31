@@ -609,13 +609,15 @@ func (m *mcpManager) fetchOAuthCode(ctx context.Context, name, redirectURI, auth
 		io.WriteString(w, "OAuth response received. You can return to Hanoi.")
 	})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	serveErr := make(chan error, 1)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 		_ = server.Close()
+		_ = listener.Close()
+		<-serveErr
 	}()
-	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 	m.mu.Lock()
 	if entry := m.servers[name]; entry != nil {

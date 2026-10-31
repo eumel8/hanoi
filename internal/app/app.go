@@ -160,6 +160,8 @@ type tuiModel struct {
 	sessionCursor int
 	sessions      []memorySession
 	autoSave      bool
+	voice         *voiceClient
+	voiceState    string
 }
 
 var (
@@ -187,6 +189,11 @@ func Run(version string) error {
 	authProvider := flag.String("auth", "", "log in to a provider (github-copilot)")
 	logoutProvider := flag.String("logout", "", "delete a provider login (github-copilot)")
 	listModels := flag.Bool("models", false, "discover and list available GitHub Copilot models")
+	voice := flag.Bool("voice", false, "enable local speech in the TUI (F4 to start/stop recording)")
+	voiceHelper := flag.String("voice-helper", "voice/voice.py", "path to the local voice helper script")
+	voicePython := flag.String("voice-python", defaultVoicePython(), "Python executable for the voice helper")
+	voiceWhisper := flag.String("voice-whisper-model", "", "path to a local whisper.cpp model")
+	voicePiper := flag.String("voice-piper-model", "", "path to a local Piper voice model")
 	flag.Parse()
 
 	if *showVersion {
@@ -244,7 +251,10 @@ func Run(version string) error {
 	defer cfg.MCP.Close()
 
 	if *tui {
-		return runTUI(cfg, *memory)
+		if *voice && (*voiceWhisper == "" || *voicePiper == "") {
+			return errors.New("-voice requires -voice-whisper-model and -voice-piper-model")
+		}
+		return runTUIWithVoice(cfg, *memory, voiceOptions{enabled: *voice, helper: *voiceHelper, python: *voicePython, whisper: *voiceWhisper, piper: *voicePiper})
 	}
 
 	if flag.NArg() < 1 {
@@ -280,6 +290,10 @@ func Run(version string) error {
 }
 
 func runTUI(cfg config, memoryName string) error {
+	return runTUIWithVoice(cfg, memoryName, voiceOptions{})
+}
+
+func runTUIWithVoice(cfg config, memoryName string, options voiceOptions) error {
 	if cfg.Trace == nil {
 		cfg.Trace = trace.New(nil)
 	}
@@ -324,10 +338,21 @@ func runTUI(cfg config, memoryName string) error {
 	m.renderMarkdown("")
 	m.rebuildHistory()
 
+	if options.enabled {
+		client, err := startVoice(options)
+		if err != nil {
+			return err
+		}
+		defer client.close()
+		m.voice = client
+	}
 	// We only use wheel/click events. AllMotion also reports every pointer move;
 	// on terminals that lose SGR mouse parsing after a tool call, those events
 	// flood the chat input as literal [<35... sequences.
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	if m.voice != nil {
+		m.voice.listen(p.Send)
+	}
 	streamProgram = p
 	final, runErr := p.Run()
 	if model, ok := final.(tuiModel); ok && model.chatCancel != nil {
@@ -345,6 +370,24 @@ func (m tuiModel) Init() tea.Cmd {
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case voiceEvent:
+		if msg.Error != "" {
+			m.err = "Voice: " + msg.Error
+			m.voiceState = ""
+		} else if msg.Type == "transcript" {
+			m.voiceState = ""
+			if strings.TrimSpace(msg.Text) == "" {
+				m.err = "Voice: no speech recognized"
+			} else if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.doctorOpen && !m.traceOpen {
+				m.textarea.SetValue(msg.Text)
+				m.textarea.CursorEnd()
+			} else {
+				m.err = "Voice transcript discarded: chat input is unavailable"
+			}
+		} else if (msg.Type == "recording" || msg.Type == "transcribing") && m.voiceState != "transcribing" {
+			m.voiceState = msg.Type
+		}
+		return m, nil
 	case copilotLoginStartedMsg:
 		if msg.err != nil {
 			m.endProviderAuth(msg.err)
@@ -385,6 +428,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatCancel()
 			}
 			return m, tea.Quit
+		}
+		if msg.String() == "f4" && m.voice != nil {
+			if m.voiceState == "recording" {
+				m.voiceState = "transcribing"
+				m.voice.send("stop", "")
+			} else if m.voiceState == "" && !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.doctorOpen && !m.traceOpen {
+				m.voiceState = "recording"
+				m.err = ""
+				m.voice.send("start", "")
+			}
+			return m, nil
 		}
 		if m.loading && msg.Type == tea.KeyEsc {
 			now := time.Now()
@@ -649,6 +703,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = ""
 		if msg.text != "" {
 			m.messages = append(m.messages, message{Role: "assistant", Content: msg.text})
+			if m.voice != nil && !cancelled && msg.err == nil {
+				m.voice.send("speak", msg.text)
+			}
 		}
 		if m.memoryName != "" {
 			if err := saveMemory(m.memoryName, m.messages); err != nil {
@@ -721,6 +778,9 @@ func (m tuiModel) View() string {
 	}
 	if m.doctorBusy {
 		status = m.spinner.View() + " running diagnostics..."
+	}
+	if m.voiceState != "" {
+		status = hintStyle.Render("voice: " + m.voiceState + " (F4 to stop recording)")
 	}
 	if m.err != "" {
 		if strings.HasPrefix(m.err, "Commands:") {
