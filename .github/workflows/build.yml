@@ -22,8 +22,6 @@ jobs:
           cache: true
       - run: go test -race ./... -timeout 90s
       - run: go vet ./...
-      - name: Check voice helper syntax
-        run: python -c "import ast, pathlib; ast.parse(pathlib.Path('voice/voice.py').read_text(encoding='utf-8'))"
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -79,20 +77,10 @@ jobs:
             actual="$("./dist/$BINARY" -version)"
             test "$actual" = "hanoi $VERSION"
           fi
-          python - "$BINARY" <<'PY'
-          import hashlib
-          import pathlib
-          import sys
-
-          binary = pathlib.Path("dist") / sys.argv[1]
-          checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
-          pathlib.Path(str(binary) + ".sha256").write_text(
-              f"{checksum}  {binary.name}\n", encoding="utf-8"
-          )
-          PY
-          if [ "$GOOS" = windows ] || [ "$GOOS" = darwin ]; then
-            mkdir -p dist/voice
-            cp voice/voice.py dist/voice/voice.py
+          if [ "$GOOS" = darwin ]; then
+            (cd dist && shasum -a 256 "$BINARY" > "$BINARY.sha256")
+          else
+            (cd dist && sha256sum "$BINARY" > "$BINARY.sha256")
           fi
       - uses: actions/upload-artifact@v4
         with:

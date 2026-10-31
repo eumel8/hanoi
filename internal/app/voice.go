@@ -1,13 +1,16 @@
 package app
 
 import (
-	"bufio"
-	"encoding/json"
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,89 +18,66 @@ import (
 )
 
 type voiceOptions struct {
-	enabled                        bool
-	helper, python, whisper, piper string
+	enabled               bool
+	input, whisper, piper string
 }
 
 type voiceEvent struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	Error string `json:"error,omitempty"`
+	Type  string
+	Text  string
+	Error string
 }
 
 type voiceRequest struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type string
+	Text string
 }
 
+// voiceClient owns the external audio processes. Only its loop changes the
+// recording state; transcription and playback run independently of the TUI.
 type voiceClient struct {
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	stdout   io.ReadCloser
-	mu       sync.Mutex
-	closed   bool
-	requests chan voiceRequest
-	notify   func(tea.Msg)
-}
-
-func defaultVoicePython() string {
-	if runtime.GOOS == "windows" {
-		return "python"
-	}
-	return "python3"
+	options        voiceOptions
+	dir            string
+	notify         func(tea.Msg)
+	requests       chan voiceRequest
+	done           chan struct{}
+	mu             sync.Mutex
+	closed         bool
+	record         *exec.Cmd
+	recordIn       io.WriteCloser
+	recordErr      *bytes.Buffer
+	playStop       context.CancelFunc
+	transcribeStop context.CancelFunc
+	workers        sync.WaitGroup
 }
 
 func startVoice(options voiceOptions) (*voiceClient, error) {
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
-		return nil, fmt.Errorf("local voice is currently supported on Windows and macOS; run the native Hanoi binary")
+		return nil, errors.New("local voice requires the native Windows or macOS binary")
 	}
-	for _, path := range []string{options.helper, options.whisper, options.piper} {
-		if _, err := os.Stat(path); err != nil {
-			return nil, fmt.Errorf("voice file %q: %w", path, err)
+	if strings.TrimSpace(options.input) == "" {
+		return nil, errors.New("-voice-input is required (FFmpeg microphone device)")
+	}
+	for _, tool := range []string{"ffmpeg", "ffplay", "whisper-cli", "piper"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return nil, fmt.Errorf("voice requires %s on PATH: %w", tool, err)
 		}
 	}
-	cmd := exec.Command(options.python, "-u", options.helper, "--whisper-model", options.whisper, "--piper-model", options.piper)
-	stdin, err := cmd.StdinPipe()
+	for _, path := range []string{options.whisper, options.piper, options.piper + ".json"} {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("voice model %q: %w", path, err)
+		}
+	}
+	dir, err := os.MkdirTemp("", "hanoi-voice-")
 	if err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start voice helper: %w", err)
-	}
-	return &voiceClient{cmd: cmd, stdin: stdin, stdout: stdout, requests: make(chan voiceRequest, 16)}, nil
+	return &voiceClient{options: options, dir: dir, requests: make(chan voiceRequest, 16), done: make(chan struct{})}, nil
 }
 
 func (v *voiceClient) listen(notify func(tea.Msg)) {
 	v.notify = notify
-	go func() {
-		for request := range v.requests {
-			if err := json.NewEncoder(v.stdin).Encode(request); err != nil {
-				notify(voiceEvent{Error: err.Error()})
-				return
-			}
-		}
-		_ = v.stdin.Close()
-	}()
-	go func() {
-		scanner := bufio.NewScanner(v.stdout)
-		scanner.Buffer(make([]byte, 4096), 1024*1024)
-		for scanner.Scan() {
-			var event voiceEvent
-			if err := json.Unmarshal(scanner.Bytes(), &event); err == nil {
-				notify(event)
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			notify(voiceEvent{Error: err.Error()})
-		} else {
-			notify(voiceEvent{Error: "helper stopped"})
-		}
-	}()
+	go v.loop()
 }
 
 func (v *voiceClient) send(kind, text string) {
@@ -107,11 +87,176 @@ func (v *voiceClient) send(kind, text string) {
 		select {
 		case v.requests <- voiceRequest{Type: kind, Text: text}:
 		default:
-			if v.notify != nil {
-				go v.notify(voiceEvent{Error: "voice helper is busy"})
-			}
+			go v.notify(voiceEvent{Error: "voice helper is busy"})
 		}
 	}
+}
+
+func (v *voiceClient) loop() {
+	defer close(v.done)
+	for request := range v.requests {
+		switch request.Type {
+		case "start":
+			if err := v.startRecording(); err != nil {
+				v.notify(voiceEvent{Error: err.Error()})
+			}
+		case "stop":
+			if err := v.stopRecording(true); err != nil {
+				v.notify(voiceEvent{Error: err.Error()})
+			}
+		case "speak":
+			v.speak(request.Text)
+		}
+	}
+	if v.playStop != nil {
+		v.playStop()
+	}
+	if v.transcribeStop != nil {
+		v.transcribeStop()
+	}
+	_ = v.stopRecording(false)
+	v.workers.Wait()
+	_ = os.RemoveAll(v.dir)
+}
+
+func (v *voiceClient) startRecording() error {
+	if v.record != nil {
+		return nil
+	}
+	if v.playStop != nil {
+		v.playStop()
+		v.playStop = nil
+	}
+	inputArgs, err := voiceCaptureArgs(runtime.GOOS, v.options.input)
+	if err != nil {
+		return err
+	}
+	args := append([]string{"-hide_banner", "-loglevel", "error", "-y"}, inputArgs...)
+	args = append(args, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", filepath.Join(v.dir, "input.wav"))
+	cmd := exec.Command("ffmpeg", args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		return fmt.Errorf("start microphone: %w", err)
+	}
+	v.record, v.recordIn, v.recordErr = cmd, stdin, &stderr
+	v.notify(voiceEvent{Type: "recording"})
+	return nil
+}
+
+func voiceCaptureArgs(goos, input string) ([]string, error) {
+	switch goos {
+	case "windows":
+		return []string{"-f", "dshow", "-i", "audio=" + input}, nil
+	case "darwin":
+		return []string{"-f", "avfoundation", "-i", ":" + input}, nil
+	default:
+		return nil, errors.New("unsupported voice platform")
+	}
+}
+
+func (v *voiceClient) stopRecording(transcribe bool) error {
+	if v.record == nil {
+		return nil
+	}
+	cmd, stdin, stderr := v.record, v.recordIn, v.recordErr
+	v.record, v.recordIn, v.recordErr = nil, nil, nil
+	_, _ = io.WriteString(stdin, "q\n")
+	_ = stdin.Close()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		return errors.New("microphone did not stop in time")
+	}
+	if err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			if len(detail) > 400 {
+				detail = detail[len(detail)-400:]
+			}
+			return fmt.Errorf("record microphone: %w: %s", err, detail)
+		}
+		return fmt.Errorf("record microphone: %w (check -voice-input)", err)
+	}
+	if transcribe {
+		v.notify(voiceEvent{Type: "transcribing"})
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		v.transcribeStop = cancel
+		v.workers.Add(1)
+		go func() {
+			defer v.workers.Done()
+			defer cancel()
+			v.transcribe(ctx, filepath.Join(v.dir, "input.wav"))
+		}()
+	}
+	return nil
+}
+
+func (v *voiceClient) transcribe(ctx context.Context, audio string) {
+	output := filepath.Join(v.dir, "transcript")
+	cmd := exec.CommandContext(ctx, "whisper-cli", "-m", v.options.whisper, "-f", audio, "-l", "de", "-nt", "-otxt", "-of", output)
+	if result, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() == nil || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			v.notify(voiceEvent{Error: voiceCommandError("transcription", err, result)})
+		}
+		return
+	}
+	text, err := os.ReadFile(output + ".txt")
+	if err != nil {
+		v.notify(voiceEvent{Error: fmt.Sprintf("read transcription: %v", err)})
+		return
+	}
+	v.notify(voiceEvent{Type: "transcript", Text: strings.TrimSpace(string(text))})
+}
+
+func (v *voiceClient) speak(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	if v.playStop != nil {
+		v.playStop()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	v.playStop = cancel
+	v.workers.Add(1)
+	go func() {
+		defer v.workers.Done()
+		audio := filepath.Join(v.dir, fmt.Sprintf("speech-%d.wav", time.Now().UnixNano()))
+		defer os.Remove(audio)
+		cmd := exec.CommandContext(ctx, "piper", "--model", v.options.piper, "--output_file", audio)
+		cmd.Stdin = strings.NewReader(text)
+		if result, err := cmd.CombinedOutput(); err != nil {
+			if ctx.Err() == nil {
+				v.notify(voiceEvent{Error: voiceCommandError("speech synthesis", err, result)})
+			}
+			return
+		}
+		cmd = exec.CommandContext(ctx, "ffplay", "-nodisp", "-autoexit", "-loglevel", "error", audio)
+		if result, err := cmd.CombinedOutput(); err != nil && ctx.Err() == nil {
+			v.notify(voiceEvent{Error: voiceCommandError("speech playback", err, result)})
+		}
+	}()
+}
+
+func voiceCommandError(operation string, err error, output []byte) string {
+	detail := strings.TrimSpace(string(output))
+	if len(detail) > 400 {
+		detail = detail[len(detail)-400:]
+	}
+	if detail != "" {
+		return fmt.Sprintf("%s: %v: %s", operation, err, detail)
+	}
+	return fmt.Sprintf("%s: %v", operation, err)
 }
 
 func (v *voiceClient) close() {
@@ -119,12 +264,5 @@ func (v *voiceClient) close() {
 	v.closed = true
 	close(v.requests)
 	v.mu.Unlock()
-	done := make(chan struct{})
-	go func() { _ = v.cmd.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		_ = v.cmd.Process.Kill()
-		<-done
-	}
+	<-v.done
 }

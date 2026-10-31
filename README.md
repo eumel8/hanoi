@@ -27,34 +27,32 @@ transcription and speech synthesis run locally. Only the resulting text is sent
 to the configured chat provider (including Copilot). Nothing records audio in
 the chat session.
 
-Install Python 3 and the helper's Python dependencies in the same environment:
-
-```bash
-python -m pip install numpy sounddevice soundfile
-```
-
-On macOS use `python3` if `python` is unavailable. Install the local
-`whisper-cli` (whisper.cpp) and `piper` executables on `PATH`. Download a
+No Python is required. Install the native local executables `ffmpeg`, `ffplay`,
+`whisper-cli` (whisper.cpp), and `piper` on `PATH`. Download a
 whisper.cpp GGML multilingual model (for example `ggml-small.bin`) and a German
 Piper voice (`.onnx` **and** its matching `.onnx.json` beside it) once. Choose
 model files compatible with your installed binaries. All these downloads are
 one-time setup; speech works offline afterward.
 
-From the project directory (adjust paths to your model files):
+To list microphone names on Windows, run `ffmpeg -list_devices true -f dshow -i dummy`
+in PowerShell or Command Prompt (the command reports a missing input after listing
+devices). Use the exact audio device name shown there as `-voice-input`. On macOS,
+list audio device indices with `ffmpeg -f avfoundation -list_devices true -i ""`
+and use the microphone index (often `0`).
 
-```bash
-hanoi.exe -tui -voice -voice-whisper-model path/to/ggml-small.bin -voice-piper-model path/to/de_DE-voice.onnx
+Start the native executable (adjust paths and device name):
+
+```powershell
+.\hanoi-windows-amd64.exe -tui -voice -voice-input "Microphone (USB Audio Device)" -voice-whisper-model C:\models\ggml-small.bin -voice-piper-model C:\models\de_DE-voice.onnx
 ```
 
-Use `./hanoi` on macOS. Run from the repository directory to use the default
-`voice/voice.py`. Windows/macOS CI artifacts include this helper beside the
-binary: keep the `voice/` directory and start Hanoi from the extracted directory,
-or pass `-voice-helper path/to/voice.py`. Set
-`-voice-python` when the Python executable is elsewhere. Press **F4** to start
+On macOS, use `./hanoi-darwin-arm64 -tui -voice -voice-input 0 ...` (or the
+amd64 binary on Intel). Press **F4** to start
 recording, **F4** again to stop; the transcript appears in the input field for
 review and **Enter** sends it. Completed model answers are read aloud. A new
 recording stops playback. Voice errors appear in the TUI status line. Check
-microphone permission for Python/your terminal in the OS privacy settings.
+microphone permission for your terminal in the OS privacy settings. Audio is
+stored temporarily and removed when Hanoi exits.
 
 ## Code structure
 

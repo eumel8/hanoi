@@ -26,3 +26,18 @@ func TestVoiceTranscriptReview(t *testing.T) {
 		t.Fatal("busy chat must not send or replace input")
 	}
 }
+
+func TestVoiceCaptureArgs(t *testing.T) {
+	for _, tc := range []struct{ platform, input, want string }{
+		{"windows", "Microphone (USB Audio)", "audio=Microphone (USB Audio)"},
+		{"darwin", "0", ":0"},
+	} {
+		args, err := voiceCaptureArgs(tc.platform, tc.input)
+		if err != nil || len(args) != 4 || args[3] != tc.want {
+			t.Fatalf("%s capture args = %q, %v", tc.platform, args, err)
+		}
+	}
+	if _, err := voiceCaptureArgs("linux", "0"); err == nil {
+		t.Fatal("unsupported audio platform must be rejected")
+	}
+}

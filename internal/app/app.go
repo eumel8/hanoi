@@ -190,8 +190,7 @@ func Run(version string) error {
 	logoutProvider := flag.String("logout", "", "delete a provider login (github-copilot)")
 	listModels := flag.Bool("models", false, "discover and list available GitHub Copilot models")
 	voice := flag.Bool("voice", false, "enable local speech in the TUI (F4 to start/stop recording)")
-	voiceHelper := flag.String("voice-helper", "voice/voice.py", "path to the local voice helper script")
-	voicePython := flag.String("voice-python", defaultVoicePython(), "Python executable for the voice helper")
+	voiceInput := flag.String("voice-input", "", "microphone name (Windows dshow) or device index (macOS avfoundation)")
 	voiceWhisper := flag.String("voice-whisper-model", "", "path to a local whisper.cpp model")
 	voicePiper := flag.String("voice-piper-model", "", "path to a local Piper voice model")
 	flag.Parse()
@@ -251,10 +250,10 @@ func Run(version string) error {
 	defer cfg.MCP.Close()
 
 	if *tui {
-		if *voice && (*voiceWhisper == "" || *voicePiper == "") {
-			return errors.New("-voice requires -voice-whisper-model and -voice-piper-model")
+		if *voice && (*voiceInput == "" || *voiceWhisper == "" || *voicePiper == "") {
+			return errors.New("-voice requires -voice-input, -voice-whisper-model and -voice-piper-model")
 		}
-		return runTUIWithVoice(cfg, *memory, voiceOptions{enabled: *voice, helper: *voiceHelper, python: *voicePython, whisper: *voiceWhisper, piper: *voicePiper})
+		return runTUIWithVoice(cfg, *memory, voiceOptions{enabled: *voice, input: *voiceInput, whisper: *voiceWhisper, piper: *voicePiper})
 	}
 
 	if flag.NArg() < 1 {
