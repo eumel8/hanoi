@@ -18,8 +18,8 @@ import (
 )
 
 type voiceOptions struct {
-	enabled               bool
-	input, whisper, piper string
+	enabled                                 bool
+	input, whisper, piper, debugDir, prompt string
 }
 
 type voiceEvent struct {
@@ -66,6 +66,15 @@ func startVoice(options voiceOptions) (*voiceClient, error) {
 	for _, path := range []string{options.whisper, options.piper, options.piper + ".json"} {
 		if _, err := os.Stat(path); err != nil {
 			return nil, fmt.Errorf("voice model %q: %w", path, err)
+		}
+	}
+	if options.debugDir != "" {
+		if err := os.MkdirAll(options.debugDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create voice debug directory: %w", err)
+		}
+		info, err := os.Stat(options.debugDir)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("voice debug directory %q is not a directory", options.debugDir)
 		}
 	}
 	dir, err := os.MkdirTemp("", "hanoi-voice-")
@@ -189,6 +198,14 @@ func (v *voiceClient) stopRecording(transcribe bool) error {
 		return fmt.Errorf("record microphone: %w (check -voice-input)", err)
 	}
 	if transcribe {
+		audio := filepath.Join(v.dir, "input.wav")
+		var debugBase string
+		if v.options.debugDir != "" {
+			debugBase = filepath.Join(v.options.debugDir, fmt.Sprintf("voice-%d", time.Now().UnixNano()))
+			if err := copyVoiceDebugFile(audio, debugBase+".wav"); err != nil {
+				return fmt.Errorf("save voice debug recording: %w", err)
+			}
+		}
 		v.notify(voiceEvent{Type: "transcribing"})
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		v.transcribeStop = cancel
@@ -196,15 +213,15 @@ func (v *voiceClient) stopRecording(transcribe bool) error {
 		go func() {
 			defer v.workers.Done()
 			defer cancel()
-			v.transcribe(ctx, filepath.Join(v.dir, "input.wav"))
+			v.transcribe(ctx, audio, debugBase)
 		}()
 	}
 	return nil
 }
 
-func (v *voiceClient) transcribe(ctx context.Context, audio string) {
+func (v *voiceClient) transcribe(ctx context.Context, audio, debugBase string) {
 	output := filepath.Join(v.dir, "transcript")
-	cmd := exec.CommandContext(ctx, "whisper-cli", "-m", v.options.whisper, "-f", audio, "-l", "de", "-nt", "-otxt", "-of", output)
+	cmd := exec.CommandContext(ctx, "whisper-cli", whisperArgs(v.options, audio, output)...)
 	if result, err := cmd.CombinedOutput(); err != nil {
 		if ctx.Err() == nil || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			v.notify(voiceEvent{Error: voiceCommandError("transcription", err, result)})
@@ -216,7 +233,40 @@ func (v *voiceClient) transcribe(ctx context.Context, audio string) {
 		v.notify(voiceEvent{Error: fmt.Sprintf("read transcription: %v", err)})
 		return
 	}
+	if debugBase != "" {
+		if err := os.WriteFile(debugBase+".txt", text, 0o600); err != nil {
+			v.notify(voiceEvent{Error: fmt.Sprintf("save voice debug transcript: %v", err)})
+			return
+		}
+	}
 	v.notify(voiceEvent{Type: "transcript", Text: strings.TrimSpace(string(text))})
+}
+
+func whisperArgs(options voiceOptions, audio, output string) []string {
+	args := []string{"-m", options.whisper, "-f", audio, "-l", "de", "-nt", "-otxt", "-of", output}
+	if prompt := strings.TrimSpace(options.prompt); prompt != "" {
+		args = append(args, "--prompt", prompt)
+	}
+	return args
+}
+
+func copyVoiceDebugFile(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(target)
+		return errors.Join(copyErr, closeErr)
+	}
+	return nil
 }
 
 func (v *voiceClient) speak(text string) {

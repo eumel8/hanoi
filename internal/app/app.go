@@ -193,6 +193,8 @@ func Run(version string) error {
 	voiceInput := flag.String("voice-input", "", "microphone name (Windows dshow) or device index (macOS avfoundation)")
 	voiceWhisper := flag.String("voice-whisper-model", "", "path to a local whisper.cpp model")
 	voicePiper := flag.String("voice-piper-model", "", "path to a local Piper voice model")
+	voiceDebugDir := flag.String("voice-debug-dir", "", "save microphone WAV and transcript here for speech diagnosis")
+	voicePrompt := flag.String("voice-prompt", "", "optional local Whisper context for names and technical terms")
 	flag.Parse()
 
 	if *showVersion {
@@ -253,7 +255,7 @@ func Run(version string) error {
 		if *voice && (*voiceInput == "" || *voiceWhisper == "" || *voicePiper == "") {
 			return errors.New("-voice requires -voice-input, -voice-whisper-model and -voice-piper-model")
 		}
-		return runTUIWithVoice(cfg, *memory, voiceOptions{enabled: *voice, input: *voiceInput, whisper: *voiceWhisper, piper: *voicePiper})
+		return runTUIWithVoice(cfg, *memory, voiceOptions{enabled: *voice, input: *voiceInput, whisper: *voiceWhisper, piper: *voicePiper, debugDir: *voiceDebugDir, prompt: *voicePrompt})
 	}
 
 	if flag.NArg() < 1 {

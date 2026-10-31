@@ -116,6 +116,50 @@ new recording stops playback. Voice errors appear in the TUI status line.
 Allow microphone access for your terminal in the OS privacy settings. Audio is
 stored temporarily and removed when Hanoi exits.
 
+### Wenn die Spracherkennung ungenau ist
+
+Starte Hanoi testweise mit `-voice-debug-dir` zusätzlich zu den bisherigen
+Parametern, z. B. `-voice-debug-dir C:\voice-debug` unter Windows oder
+`-voice-debug-dir "$HOME/voice-debug"` auf macOS. Nach jedem F4-Durchlauf
+liegen dort `voice-<zeitstempel>.wav` und die zugehörige `.txt`-Transkription.
+Höre die WAV-Datei ab (z. B. mit `ffplay C:\voice-debug\voice-...wav`):
+
+- Ist die Aufnahme leise, verzerrt, abgeschnitten oder enthält sie andere
+  Geräusche? Wähle mit `-voice-input` das richtige Mikrofon, prüfe Pegel und
+  Berechtigungen. Starte die Aufnahme mit F4, warte kurz, sprich deutlich und
+  drücke F4 erst nach dem letzten Wort. Nutze nach Möglichkeit ein Headset.
+- Klingt die Aufnahme gut, aber die `.txt`-Datei ist falsch? Verwende statt
+  `ggml-base.bin` das größere, **mehrsprachige**
+  [`ggml-small.bin`](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin)
+  (oder `ggml-medium.bin` bei ausreichend RAM). Ändere dafür nur den Pfad bei
+  `-voice-whisper-model`; `.en`-Modelle sind für Deutsch ungeeignet. Das Modell
+  beeinflusst nur das Transkript, nicht die Piper-Stimme.
+
+  Beispiel: Wird das klar gesprochene Wort **„Spracherkennung“** als etwas mit
+  **„Häschen“** transkribiert, ist das eine Wortverwechslung bei Whisper. Probiere
+  zuerst ein größeres mehrsprachiges Modell. Falls vor allem einzelne Begriffe
+  betroffen sind, ergänze sie im lokalen `-voice-prompt` (siehe unten). Prüfe
+  den erkannten Text vor dem Senden mit Enter; ein Prompt garantiert keine
+  korrekte Erkennung.
+
+Wenn besonders **Eigennamen und technische Wörter** verwechselt werden, kannst
+du Whisper zusätzlich einen kurzen lokalen Wortschatz mitgeben, z. B.:
+
+```powershell
+.\hanoi-windows-amd64.exe -tui -voice -voice-input "DEIN MIKROFON" -voice-whisper-model C:\models\ggml-small.bin -voice-piper-model C:\models\de_DE-thorsten-medium.onnx -voice-prompt "Spracherkennung, Hanoi, GitHub Copilot, MCP, Bash, WSL."
+```
+
+Auf macOS funktionieren dieselben `-voice-prompt`-Wörter mit dem dortigen
+Startbefehl. Der Text wird als `whisper-cli --prompt` nur **lokal** an die
+Spracherkennung übergeben; er ist keine garantiert korrekte Ersetzung und wird
+nicht an das Chatmodell gesendet. Halte ihn kurz und verwende die korrekten
+Schreibweisen. Bei vielen gewöhnlichen falschen Wörtern hilft eher ein größeres
+Modell als eine längere Wortliste.
+
+Ohne `-voice-debug-dir` bleiben keine Aufnahmen auf der Platte. Die
+Diagnosedateien enthalten deine gesprochenen Eingaben und werden **nicht**
+automatisch gelöscht; entferne den Ordner nach dem Test selbst.
+
 ## Code structure
 
 Hanoi uses one Go module with focused internal packages:
