@@ -324,7 +324,10 @@ func runTUI(cfg config, memoryName string) error {
 	m.renderMarkdown("")
 	m.rebuildHistory()
 
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	// We only use wheel/click events. AllMotion also reports every pointer move;
+	// on terminals that lose SGR mouse parsing after a tool call, those events
+	// flood the chat input as literal [<35... sequences.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	streamProgram = p
 	final, runErr := p.Run()
 	if model, ok := final.(tuiModel); ok && model.chatCancel != nil {
