@@ -171,13 +171,13 @@ type tuiModel struct {
 
 var (
 	appStyle      = lipgloss.NewStyle().Padding(1, 2)
-	headStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	userStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
-	botStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
-	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	hintStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
+	headStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#1d4ed8", Dark: "#93c5fd"})
+	userStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"})
+	botStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#0e7490", Dark: "#67e8f9"})
+	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#b91c1c", Dark: "#fca5a5"})
+	hintStyle     = lipgloss.NewStyle()
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#854d0e", Dark: "#fde047"})
+	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	streamProgram *tea.Program
 )
 
@@ -194,11 +194,15 @@ func Run(version string) error {
 	authProvider := flag.String("auth", "", "log in to a provider (github-copilot)")
 	logoutProvider := flag.String("logout", "", "delete a provider login (github-copilot)")
 	listModels := flag.Bool("models", false, "discover and list available GitHub Copilot models")
+	theme := flag.String("theme", "auto", "terminal theme: auto, light or dark")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("hanoi " + version)
 		return nil
+	}
+	if err := configureTerminalTheme(*theme); err != nil {
+		return err
 	}
 	if *authProvider != "" || *logoutProvider != "" {
 		return runProviderAuth(*authProvider, *logoutProvider)
@@ -318,6 +322,7 @@ func runTUI(cfg config, memoryName string) error {
 	ta.ShowLineNumbers = false
 	ta.Prompt = "│ "
 	ta.CharLimit = 0
+	configureTextareaColors(&ta)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -340,7 +345,6 @@ func runTUI(cfg config, memoryName string) error {
 	}
 	// Detect the terminal background before Bubble Tea takes over terminal input.
 	m.resizeChat()
-	m.renderMarkdown("")
 	m.rebuildHistory()
 
 	// Leave mouse reporting disabled so the terminal can select and copy text,
@@ -799,17 +803,17 @@ func (m *tuiModel) rebuildHistory() {
 
 func (m *tuiModel) renderMarkdown(text string) string {
 	text = tuiDisplayText(text)
+	if text == "" {
+		return ""
+	}
 	if len(text) > maxTUIMarkdownBytes {
 		return text
 	}
 	if m.markdown == nil {
-		style := "light"
-		if lipgloss.HasDarkBackground() {
-			style = "dark"
-		}
 		width := max(1, m.viewport.Width)
 		renderer, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(style),
+			glamour.WithStyles(terminalMarkdownStyle(lipgloss.HasDarkBackground())),
+			glamour.WithColorProfile(lipgloss.ColorProfile()),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
