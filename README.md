@@ -248,8 +248,10 @@ Inside TUI:
 - `↑`/`↓` recalls earlier prompts and slash commands at the first/last input line;
   `Alt+↑`/`Alt+↓` recalls them from anywhere, preserving the current draft
   (session history, seeded from saved user messages when using `-memory`)
-- `PgUp`/`PgDown` or the mouse wheel scrolls the chat; `Ctrl+Home`/`Ctrl+End`
+- `PgUp`/`PgDown` scrolls the chat; `Ctrl+Home`/`Ctrl+End`
   jumps to the beginning/end, with a scrollbar showing the current position
+- mouse reporting is disabled so the terminal can select and copy chat and menu
+  text normally, including under WSL; use your terminal's copy shortcut
 - assistant responses stream live in the TUI
 - scrolling up pauses automatic following until you return to the bottom
 - Markdown headings, lists, tables, and syntax-highlighted code blocks render live,
