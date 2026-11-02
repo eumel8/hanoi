@@ -33,12 +33,18 @@ func TestToolFollowupWithEmptyContent(t *testing.T) {
 				return
 			}
 		}
-		if len(request.Messages) < 2 || request.Messages[0]["role"] != "system" || request.Messages[0]["content"] != "Project rules" || request.Messages[1]["content"] != "Manual rules" {
+		if len(request.Messages) < 2 || request.Messages[0]["role"] != "system" || request.Messages[0]["content"] != "Project rules\n\nManual rules" {
 			t.Error("missing project or manual instructions in tool request")
 			w.WriteHeader(400)
 			return
 		}
-		request.Messages = request.Messages[2:]
+		request.Messages = request.Messages[1:]
+		for _, msg := range request.Messages {
+			if msg["role"] == "system" {
+				http.Error(w, "System message must be at the beginning.", 400)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if requests == 1 {
 			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_test","type":"function","function":{"name":"bash","arguments":"{\"command\":\"true\"}"}}]}}]}`)

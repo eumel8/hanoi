@@ -1145,17 +1145,25 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (te
 }
 
 func requestModel(cfg config, messages []message, stream bool, onChunk func(string)) (msg message, err error) {
-	// An empty system message marks an explicitly cleared session default on
-	// disk, but need not be sent to providers that reject empty instructions.
+	// Some provider chat templates accept only one system message at index 0.
+	// Merge project and session instructions without changing persisted history.
 	input := make([]message, 0, len(messages)+1)
+	var instructions []string
 	if cfg.AgentInstructions != "" {
-		// Inject once per request, leaving conversation/session history unchanged.
-		input = append(input, message{Role: "system", Content: cfg.AgentInstructions})
+		instructions = append(instructions, cfg.AgentInstructions)
 	}
 	for _, msg := range messages {
-		if msg.Role != "system" || msg.Content != "" {
-			input = append(input, msg)
+		if msg.Role == "system" {
+			// Empty system messages are session persistence markers only.
+			if msg.Content != "" {
+				instructions = append(instructions, msg.Content)
+			}
+			continue
 		}
+		input = append(input, msg)
+	}
+	if len(instructions) > 0 {
+		input = append([]message{{Role: "system", Content: strings.Join(instructions, "\n\n")}}, input...)
 	}
 	messages = input
 	started := time.Now()

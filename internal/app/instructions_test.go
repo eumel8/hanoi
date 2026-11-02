@@ -1,14 +1,69 @@
 package app
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	appconfig "hanoi/internal/config"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+func TestSystemMessagesNormalizedForProvider(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			messages := []message{
+				{Role: "user", Content: "Earlier question"},
+				{Role: "system", Content: "Manual rules"},
+				{Role: "assistant", Content: "Earlier answer"},
+				{Role: "system", Content: ""},
+				{Role: "system", Content: "Additional rules"},
+				{Role: "user", Content: "Next question"},
+			}
+			original := append([]message(nil), messages...)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request chatRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				want := []message{
+					{Role: "system", Content: "Project rules\n\nManual rules\n\nAdditional rules"},
+					messages[0], messages[2], messages[5],
+				}
+				if !reflect.DeepEqual(request.Messages, want) {
+					t.Errorf("unexpected provider messages: %+v", request.Messages)
+					http.Error(w, "System message must be at the beginning.", 400)
+					return
+				}
+				if stream {
+					writeStreamChoice(w, map[string]any{"content": "done"}, "stop")
+					fmt.Fprint(w, "data: [DONE]\n\n")
+				} else {
+					fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"done"}}]}`)
+				}
+			}))
+			defer server.Close()
+			cfg := config{Config: appconfig.Config{Model: "test", BaseURL: server.URL}, AgentInstructions: "Project rules"}
+			msg, err := requestModel(cfg, messages, stream, nil)
+			if err != nil || msg.Content != "done" {
+				t.Fatalf("response=%q err=%v", msg.Content, err)
+			}
+			if !reflect.DeepEqual(messages, original) {
+				t.Fatal("request normalization changed session history")
+			}
+		})
+	}
+}
 
 func TestAgentInstructionsDiscovery(t *testing.T) {
 	root := t.TempDir()

@@ -31,12 +31,14 @@ func TestResponsesToolLoop(t *testing.T) {
 					t.Errorf("invalid request: %+v", request)
 				}
 				var instructions struct{ Role, Content string }
-				if len(request.Input) == 0 || json.Unmarshal(request.Input[0], &instructions) != nil || instructions.Role != "system" || instructions.Content != "Project rules" {
+				if len(request.Input) == 0 || json.Unmarshal(request.Input[0], &instructions) != nil || instructions.Role != "system" || instructions.Content != "Project rules\n\nManual rules" {
 					t.Error("missing project instructions in Responses request")
 				}
-				var manual struct{ Role, Content string }
-				if len(request.Input) < 2 || json.Unmarshal(request.Input[1], &manual) != nil || manual.Role != "system" || manual.Content != "Manual rules" {
-					t.Error("missing manual system prompt in Responses request")
+				for _, raw := range request.Input[1:] {
+					var item struct{ Role string }
+					if json.Unmarshal(raw, &item) == nil && item.Role == "system" {
+						t.Error("system message after the beginning of Responses input")
+					}
 				}
 				output := `[{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque"},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash","arguments":"{\"command\":\"printf result\"}"}]`
 				if requests == 2 {

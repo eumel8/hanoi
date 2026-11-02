@@ -311,10 +311,12 @@ other ancestor files and files in child directories are not loaded. An empty
 nearest file provides no rules. Files must be UTF-8 and at most 1 MiB;
 unreadable or invalid files cause a startup error instead of silently ignoring rules.
 
-The file content, absolute path and base directory are sent as a system message
-on every CLI and TUI model request, including streaming and tool follow-ups.
-The TUI header shows the loaded path. A manual `/system` prompt is sent after the
-project instructions; clearing it leaves `AGENTS.md` active. Project instructions
+The file content, absolute path and base directory are combined with the manual
+`/system` prompt into one system message at the beginning of every CLI and TUI
+model request, including streaming and tool follow-ups. Project instructions
+come first, followed by the manual prompt. This also supports providers that
+accept only one leading system message. The TUI header shows the loaded path.
+Clearing the manual prompt leaves `AGENTS.md` active. Project instructions
 stay active across session changes and are not copied into session files.
 Restart Hanoi to load changes to `AGENTS.md`. Its contents are included in API
 requests and in the API log when `-log` is enabled.
