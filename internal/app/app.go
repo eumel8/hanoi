@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"hanoi/internal/skills"
 	"hanoi/internal/tools"
 	"hanoi/internal/trace"
 
@@ -162,6 +163,10 @@ type tuiModel struct {
 	sessionCursor int
 	sessions      []memorySession
 	autoSave      bool
+	skillsOpen    bool
+	skillCursor   int
+	skills        []skills.Skill
+	skillWarnings []string
 }
 
 var (
@@ -427,6 +432,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionsOpen {
 			return m.updateSessionMenu(msg)
 		}
+		if m.skillsOpen {
+			return m.updateSkillMenu(msg)
+		}
 		if m.doctorOpen {
 			if msg.String() == "esc" {
 				m.doctorOpen = false
@@ -600,7 +608,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		if !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.mcpBusy {
+		if !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.mcpBusy {
 			// Explicitly handle scroll wheel events for WSL/Touchpad compatibility.
 			switch tea.MouseMsg(msg).Button {
 			case tea.MouseButtonWheelUp:
@@ -715,6 +723,8 @@ func (m tuiModel) View() string {
 		body = m.sessionView()
 	} else if m.providersOpen {
 		body = m.providerView()
+	} else if m.skillsOpen {
+		body = m.skillView()
 	}
 
 	status := hintStyle.Render("ready")
@@ -738,7 +748,7 @@ func (m tuiModel) View() string {
 			status = errStyle.Render(tuiStatusText(m.err, max(1, m.width-6)))
 		}
 	}
-	if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.doctorOpen {
+	if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.doctorOpen {
 		if suggestions := m.slashSuggestions(); len(suggestions) > 0 {
 			status = hintStyle.Render(tuiStatusText("Commands: "+strings.Join(suggestions, "  ")+" · Tab to complete", max(1, m.width-6)))
 		}
@@ -903,8 +913,11 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.system = arg
 		m.err = ""
 		return m, nil
+	case "/skills":
+		m.textarea.SetValue("")
+		return m.handleSkillsCommand(arg)
 	case "/help":
-		m.err = "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		m.err = "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /skills [name] /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
 		return m, nil
 	case "/doctor":
 		if arg != "" && arg != "provider" {
