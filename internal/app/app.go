@@ -226,6 +226,18 @@ func Run(version string) error {
 		return err
 	}
 	cfg.LogPath, cfg.TracePath = *logPath, *tracePath
+	workspace, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("working directory: %w", err)
+	}
+	cfg.AgentInstructions, cfg.AgentInstructionsPath, err = loadAgentInstructions(workspace)
+	if err != nil {
+		return err
+	}
+	cfg.SystemPrompt, err = loadSystemPrompt()
+	if err != nil {
+		return err
+	}
 
 	if *logPath != "" {
 		file, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -267,7 +279,7 @@ func Run(version string) error {
 			return fmt.Errorf("load memory: %w", err)
 		}
 	}
-	messages = append(messages, message{Role: "user", Content: prompt})
+	messages = appendMessage(messages, sessionSystem(messages, cfg.SystemPrompt), message{Role: "user", Content: prompt})
 
 	assistantText, err := sendChat(cfg, messages, *stream)
 	if err != nil {
@@ -319,7 +331,7 @@ func runTUI(cfg config, memoryName string) error {
 		textarea:   ta,
 		viewport:   viewport.New(70, 10),
 		spinner:    sp,
-		system:     "",
+		system:     sessionSystem(messages, cfg.SystemPrompt),
 	}
 	for _, msg := range messages {
 		if msg.Role == "user" {
@@ -910,8 +922,30 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "/system":
+		m.textarea.SetValue("")
+		if err := saveSystemPrompt(arg); err != nil {
+			m.err = fmt.Sprintf("save system prompt: %v", err)
+			return m, nil
+		}
 		m.system = arg
-		m.err = ""
+		m.cfg.SystemPrompt = arg
+		// Update stored context immediately, including when clearing the prompt.
+		m.messages = appendMessage(m.messages, m.system)
+		if arg == "" && (len(m.messages) == 0 || m.messages[0].Role != "system") {
+			// An explicit empty prompt prevents another workspace default from
+			// reappearing when this session is resumed later.
+			m.messages = append([]message{{Role: "system", Content: ""}}, m.messages...)
+		}
+		m.err = "System prompt saved to .hanoi/system.md."
+		if arg == "" {
+			m.err = "System prompt cleared in this session and .hanoi/system.md."
+		}
+		if m.memoryName != "" {
+			if err := saveMemory(m.memoryName, m.messages); err != nil {
+				m.err = fmt.Sprintf("save session: %v", err)
+			}
+		}
+		m.rebuildHistory()
 		return m, nil
 	case "/skills":
 		m.textarea.SetValue("")
@@ -955,16 +989,14 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func appendMessage(messages []message, system string, user message) []message {
-	if system == "" {
-		return append(messages, user)
-	}
-
+func appendMessage(messages []message, system string, user ...message) []message {
 	filtered := make([]message, 0, len(messages)+2)
 	inserted := false
+	keepEmpty := false
 	for _, msg := range messages {
 		if msg.Role == "system" {
-			if !inserted {
+			keepEmpty = true
+			if !inserted && system != "" {
 				filtered = append(filtered, message{Role: "system", Content: system})
 				inserted = true
 			}
@@ -972,10 +1004,13 @@ func appendMessage(messages []message, system string, user message) []message {
 		}
 		filtered = append(filtered, msg)
 	}
-	if !inserted {
+	if !inserted && system != "" {
 		filtered = append([]message{{Role: "system", Content: system}}, filtered...)
 	}
-	filtered = append(filtered, user)
+	if system == "" && keepEmpty {
+		filtered = append([]message{{Role: "system", Content: ""}}, filtered...)
+	}
+	filtered = append(filtered, user...)
 	return filtered
 }
 
@@ -1110,6 +1145,19 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (te
 }
 
 func requestModel(cfg config, messages []message, stream bool, onChunk func(string)) (msg message, err error) {
+	// An empty system message marks an explicitly cleared session default on
+	// disk, but need not be sent to providers that reject empty instructions.
+	input := make([]message, 0, len(messages)+1)
+	if cfg.AgentInstructions != "" {
+		// Inject once per request, leaving conversation/session history unchanged.
+		input = append(input, message{Role: "system", Content: cfg.AgentInstructions})
+	}
+	for _, msg := range messages {
+		if msg.Role != "system" || msg.Content != "" {
+			input = append(input, msg)
+		}
+	}
+	messages = input
 	started := time.Now()
 	cfg.emitTrace(traceEvent{Type: "model.started"})
 	defer func() {

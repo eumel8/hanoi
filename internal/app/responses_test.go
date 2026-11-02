@@ -30,6 +30,14 @@ func TestResponsesToolLoop(t *testing.T) {
 				if r.URL.Path != "/responses" || request.Store || request.Stream != stream || request.Tools[0]["name"] != "bash" {
 					t.Errorf("invalid request: %+v", request)
 				}
+				var instructions struct{ Role, Content string }
+				if len(request.Input) == 0 || json.Unmarshal(request.Input[0], &instructions) != nil || instructions.Role != "system" || instructions.Content != "Project rules" {
+					t.Error("missing project instructions in Responses request")
+				}
+				var manual struct{ Role, Content string }
+				if len(request.Input) < 2 || json.Unmarshal(request.Input[1], &manual) != nil || manual.Role != "system" || manual.Content != "Manual rules" {
+					t.Error("missing manual system prompt in Responses request")
+				}
 				output := `[{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque"},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash","arguments":"{\"command\":\"printf result\"}"}]`
 				if requests == 2 {
 					input, _ := json.Marshal(request.Input)
@@ -51,13 +59,14 @@ func TestResponsesToolLoop(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			cfg := config{Config: appconfig.Config{Model: "gpt-6-astra", BaseURL: server.URL + "/responses"}}
+			cfg := config{Config: appconfig.Config{Model: "gpt-6-astra", BaseURL: server.URL + "/responses"}, AgentInstructions: "Project rules"}
+			messages := appendMessage(nil, "Manual rules", message{Role: "user", Content: "run"})
 			var text string
 			var err error
 			if stream {
-				text, err = sendStreamingChat(cfg, []message{{Role: "user", Content: "run"}}, nil)
+				text, err = sendStreamingChat(cfg, messages, nil)
 			} else {
-				text, err = sendChat(cfg, []message{{Role: "user", Content: "run"}}, false)
+				text, err = sendChat(cfg, messages, false)
 			}
 			if err != nil || text != "done" || requests != 2 {
 				t.Fatalf("text=%q requests=%d err=%v", text, requests, err)
