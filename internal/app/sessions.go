@@ -166,7 +166,7 @@ func (m *tuiModel) switchSession(name string) error {
 func (m *tuiModel) activateSession(name string, messages []message) {
 	m.memoryName, m.messages, m.autoSave = name, messages, true
 	m.pendingMessage = nil
-	m.system, m.streaming, m.streamRendered, m.err = "", "", "", ""
+	m.system, m.streaming, m.streamRendered, m.err = sessionSystem(messages, m.cfg.SystemPrompt), "", "", ""
 	m.sessionsOpen, m.traceOpen, m.doctorOpen = false, false, false
 	m.traceEvents = nil
 	m.userScrolled = false

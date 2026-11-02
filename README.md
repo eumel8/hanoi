@@ -268,7 +268,8 @@ Inside TUI:
 - `/model <provider/model>` switches provider and model (`/model <name>` switches within the active provider)
 - `/providers`, `/models`, or `/model` opens the provider/model picker and discovers Copilot models; `r` refreshes the list
 - `/connect github-copilot` logs in to GitHub Copilot; `/logout github-copilot` removes its local login
-- `/system <text>` sets the system prompt
+- `/system <text>` saves the system prompt for the active session and the workspace;
+  `/system` without text clears both (project instructions remain active)
 - `/mcps` opens MCP server management
 - `/skills` lists available skills; select with `↑`/`↓` and `Enter`, or use `/skills <name>` directly
 - `/trace` or `Ctrl+T` toggles the live trace timeline, including while a response is running;
@@ -278,6 +279,53 @@ Inside TUI:
 - `/help` shows commands
 
 <img src="example.png" alt="hanoi" />
+
+### System prompt and project instructions
+
+Hanoi has no built-in default system prompt. In the TUI, set one for subsequent
+messages with `/system <text>`, for example:
+
+```text
+/system Answer concisely and in German.
+```
+
+The command clears the input, confirms the change and displays the active prompt
+in the header. It saves the text to `.hanoi/system.md` in the launch directory,
+using private permissions and a temporary-file/rename write. You can also edit
+this plain UTF-8 Markdown file yourself (at most 1 MiB); restart Hanoi to load it.
+The `.hanoi/` directory is already excluded from Git in this repository.
+
+This file provides the default prompt for CLI requests, new TUI sessions and
+older sessions without a saved system prompt. A session's saved prompt takes
+precedence over the workspace default and is restored when the session is resumed.
+`/system` without text empties the file and clears the active session's prompt;
+other saved sessions retain their prompts. An explicitly cleared session stays
+cleared even if a different workspace default is set later. `/new` uses the current
+workspace default. The prompt file is separate from `hanoi.json[c]`, so saving it
+does not rewrite provider/MCP settings or JSONC comments.
+
+For project-wide rules, add a standard Markdown [AGENTS.md](https://agents.md/)
+file to your project. At startup, Hanoi searches the launch directory and then
+its parents, loading only the nearest `AGENTS.md`. A nearer file takes precedence;
+other ancestor files and files in child directories are not loaded. An empty
+nearest file provides no rules. Files must be UTF-8 and at most 1 MiB;
+unreadable or invalid files cause a startup error instead of silently ignoring rules.
+
+The file content, absolute path and base directory are combined with the manual
+`/system` prompt into one system message at the beginning of every CLI and TUI
+model request, including streaming and tool follow-ups. Project instructions
+come first, followed by the manual prompt. This also supports providers that
+accept only one leading system message. The TUI header shows the loaded path.
+Clearing the manual prompt leaves `AGENTS.md` active. Project instructions
+stay active across session changes and are not copied into session files.
+Restart Hanoi to load changes to `AGENTS.md`. Its contents are included in API
+requests and in the API log when `-log` is enabled.
+
+The repository includes a generic Kubernetes operations [`AGENTS.md`](AGENTS.md):
+verify the target context, diagnose before changing, protect secrets, prefer
+GitOps-compatible changes and verify the outcome. Copy and adapt it to your own
+operations workspace. These are model instructions, not a tool permission
+enforcement mechanism.
 
 ### Skills
 
@@ -823,8 +871,8 @@ or `/save`.
 - `/clear`: empty the active session, including its saved conversation. Use
   `/new` when you want to keep the previous conversation.
 
-Switching restores conversation messages and prompt-recall history, and resets
-the system-prompt override and session trace view. The selected provider/model
+Switching restores conversation messages, the saved manual system prompt and
+prompt-recall history, and resets the session trace view. The selected provider/model
 stays active. Stop an in-progress response before switching sessions. A failed
 save or unreadable destination leaves the current conversation open.
 

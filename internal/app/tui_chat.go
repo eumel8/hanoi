@@ -114,6 +114,9 @@ func (m tuiModel) chatHeader() []string {
 	if m.system != "" {
 		header = append(header, hintStyle.Render(tuiStatusText("system: "+m.system, max(20, m.width-6))))
 	}
+	if m.cfg.AgentInstructionsPath != "" {
+		header = append(header, hintStyle.Render(tuiStatusText("instructions: "+m.cfg.AgentInstructionsPath, max(20, m.width-6))))
+	}
 	if m.traceOpen {
 		header = append(header, headStyle.Render("Hanoi Trace · Ctrl+T / Esc returns to chat"))
 	}
