@@ -32,6 +32,52 @@ func TestInputHistory(t *testing.T) {
 	}
 }
 
+func TestSlashCommandCompletion(t *testing.T) {
+	m := tuiModel{width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10)}
+	m.textarea.SetValue("/mo")
+	if got := m.slashSuggestions(); len(got) != 2 || got[0] != "/model" || got[1] != "/models" {
+		t.Fatalf("suggestions for /mo: %v", got)
+	}
+	if view := m.View(); !strings.Contains(view, "/model") || !strings.Contains(view, "/models") {
+		t.Fatalf("matching commands should appear in the TUI: %q", view)
+	}
+	for _, want := range []string{"/model", "/models", "/model"} {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = updated.(tuiModel)
+		if got := m.textarea.Value(); got != want {
+			t.Fatalf("Tab completed to %q, want %q", got, want)
+		}
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = updated.(tuiModel)
+	if got := m.textarea.Value(); got != "/models" {
+		t.Fatalf("Shift+Tab completed to %q, want /models", got)
+	}
+	m.textarea.Focus()
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = updated.(tuiModel)
+	if m.completionPrefix != "" || len(m.slashSuggestions()) != 0 {
+		t.Fatalf("editing must reset completion and hide stale matches: %q, prefix %q", m.textarea.Value(), m.completionPrefix)
+	}
+}
+
+func TestSlashCommandCompletionOnlyForCommandName(t *testing.T) {
+	m := tuiModel{textarea: textarea.New()}
+	for _, input := range []string{"hello /mo", "/model local/mo", "/mo\nnext"} {
+		m.textarea.SetValue(input)
+		if len(m.slashSuggestions()) != 0 || m.completeSlashCommand(false) {
+			t.Fatalf("unexpected command completion for %q", input)
+		}
+		if m.textarea.Value() != input {
+			t.Fatalf("completion changed %q", input)
+		}
+	}
+	m.textarea.SetValue("/m")
+	if got := m.slashSuggestions(); len(got) != 3 || got[0] != "/mcps" || got[1] != "/model" || got[2] != "/models" {
+		t.Fatalf("suggestions for /m: %v", got)
+	}
+}
+
 func TestChatScrollDuringStreaming(t *testing.T) {
 	m := tuiModel{
 		width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10),

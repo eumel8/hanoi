@@ -9,6 +9,66 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// Keep aliases here as well so every command accepted by handleSlashCommand
+// can be discovered while typing.
+var slashCommands = []string{
+	"/clear", "/connect", "/doctor", "/exit", "/help", "/logout",
+	"/mcps", "/model", "/models", "/new", "/providers", "/quit",
+	"/save", "/sessions", "/system", "/trace",
+}
+
+func slashMatches(prefix string) []string {
+	if prefix == "" || prefix[0] != '/' || strings.ContainsAny(prefix, " \t\n\r") {
+		return nil
+	}
+	var matches []string
+	for _, command := range slashCommands {
+		if strings.HasPrefix(command, prefix) {
+			matches = append(matches, command)
+		}
+	}
+	return matches
+}
+
+func (m tuiModel) slashSuggestions() []string {
+	value := m.textarea.Value()
+	if m.completionPrefix != "" {
+		value = m.completionPrefix
+	}
+	return slashMatches(value)
+}
+
+func (m *tuiModel) completeSlashCommand(reverse bool) bool {
+	value := m.textarea.Value()
+	line := m.textarea.LineInfo()
+	if m.textarea.LineCount() != 1 || line.StartColumn+line.ColumnOffset != len([]rune(value)) {
+		return false
+	}
+	prefix := value
+	if m.completionPrefix != "" {
+		prefix = m.completionPrefix
+	}
+	matches := slashMatches(prefix)
+	if len(matches) == 0 {
+		m.completionPrefix = ""
+		return false
+	}
+	if m.completionPrefix == "" {
+		m.completionPrefix = prefix
+		m.completionIndex = 0
+		if reverse {
+			m.completionIndex = len(matches) - 1
+		}
+	} else if reverse {
+		m.completionIndex = (m.completionIndex + len(matches) - 1) % len(matches)
+	} else {
+		m.completionIndex = (m.completionIndex + 1) % len(matches)
+	}
+	m.textarea.SetValue(matches[m.completionIndex])
+	m.textarea.CursorEnd()
+	return true
+}
+
 // toolArgsSummary renders the key arguments of a tool call for status lines.
 func toolArgsSummary(call toolCall) string {
 	if call.Function.Name != "bash" {

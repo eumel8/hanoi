@@ -107,48 +107,50 @@ type chatStatusMsg string
 type chatTickMsg struct{}
 
 type tuiModel struct {
-	cfg            config
-	memoryName     string
-	messages       []message
-	history        []string
-	textarea       textarea.Model
-	viewport       viewport.Model
-	inputHistory   []string
-	historyIndex   int
-	historyDraft   string
-	renderPending  bool
-	spinner        spinner.Model
-	width          int
-	height         int
-	loading        bool
-	chatCancel     context.CancelFunc
-	cancelling     bool
-	lastEscape     time.Time
-	activity       string
-	streaming      string
-	userScrolled   bool
-	activityBase   string
-	activityLabel  string
-	activitySince  time.Time
-	activityTicker bool
-	lastScrollKey  string
-	streamRendered string
-	markdown       *glamour.TermRenderer
-	err            string
-	system         string
-	pendingMessage []message
-	mcpOpen        bool
-	mcpBusy        bool
-	mcpCursor      int
-	mcpInfo        string
-	providersOpen  bool
-	providerCursor int
-	traceOpen      bool
-	traceEvents    []traceEvent
-	chatOffset     int
-	doctorOpen     bool
-	doctorBusy     bool
-	doctorText     string
+	cfg              config
+	memoryName       string
+	messages         []message
+	history          []string
+	textarea         textarea.Model
+	viewport         viewport.Model
+	inputHistory     []string
+	historyIndex     int
+	historyDraft     string
+	completionPrefix string
+	completionIndex  int
+	renderPending    bool
+	spinner          spinner.Model
+	width            int
+	height           int
+	loading          bool
+	chatCancel       context.CancelFunc
+	cancelling       bool
+	lastEscape       time.Time
+	activity         string
+	streaming        string
+	userScrolled     bool
+	activityBase     string
+	activityLabel    string
+	activitySince    time.Time
+	activityTicker   bool
+	lastScrollKey    string
+	streamRendered   string
+	markdown         *glamour.TermRenderer
+	err              string
+	system           string
+	pendingMessage   []message
+	mcpOpen          bool
+	mcpBusy          bool
+	mcpCursor        int
+	mcpInfo          string
+	providersOpen    bool
+	providerCursor   int
+	traceOpen        bool
+	traceEvents      []traceEvent
+	chatOffset       int
+	doctorOpen       bool
+	doctorBusy       bool
+	doctorText       string
 
 	providerAuthCancel context.CancelFunc
 	providerAuthInfo   string
@@ -454,9 +456,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "up", "down", "alt+up", "alt+down":
 			if m.recallInput(msg.String()) {
+				m.completionPrefix = ""
+				return m, nil
+			}
+		case "tab", "shift+tab":
+			if m.completeSlashCommand(msg.String() == "shift+tab") {
 				return m, nil
 			}
 		case "enter":
+			m.completionPrefix = ""
 			prompt := strings.TrimSpace(m.textarea.Value())
 			if prompt == "" {
 				return m, nil
@@ -503,11 +511,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cfg.Context = ctx
 			return m, tea.Batch(m.spinner.Tick, streamChatCmd(cfg, m.pendingMessage))
 		case "alt+enter":
+			m.completionPrefix = ""
 			m.textarea.InsertRune('\n')
 			return m, nil
 		}
 
 		var cmd tea.Cmd
+		m.completionPrefix = ""
 		m.textarea, cmd = m.textarea.Update(msg)
 		return m, cmd
 
@@ -727,6 +737,11 @@ func (m tuiModel) View() string {
 			status = errStyle.Render(m.err)
 		} else {
 			status = errStyle.Render(tuiStatusText(m.err, max(1, m.width-6)))
+		}
+	}
+	if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.doctorOpen {
+		if suggestions := m.slashSuggestions(); len(suggestions) > 0 {
+			status = hintStyle.Render(tuiStatusText("Commands: "+strings.Join(suggestions, "  ")+" · Tab to complete", max(1, m.width-6)))
 		}
 	}
 
