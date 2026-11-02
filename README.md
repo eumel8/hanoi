@@ -280,6 +280,37 @@ Inside TUI:
 
 <img src="example.png" alt="hanoi" />
 
+### Terminal colors and startup
+
+Hanoi inherits the terminal's default foreground and background for ordinary
+text, hints and the input area. It does not paint a separate input-line
+background. Accent colors and Markdown highlighting adapt to light or dark
+backgrounds, and Markdown uses the terminal's detected color capabilities.
+
+The default `-theme auto` uses `COLORFGBG` when available, otherwise the terminal
+background detected by Lip Gloss. Under Linux/WSL that detection uses terminal
+queries; it is not a read of Windows Terminal's settings file. Native Windows
+executables cannot detect the background through the current library and default
+to dark unless `COLORFGBG` is available. If detection does not match your terminal,
+select the theme explicitly:
+
+```bash
+hanoi -tui -theme light
+hanoi -tui -theme dark
+```
+
+These flags select accent/highlighting styles; your terminal still controls the
+default text and background colors. Restart Hanoi after changing the terminal theme.
+
+Enabled MCP servers connect and discover tools concurrently at startup, rather
+than adding their individual delays together. Startup still waits for all servers
+to finish or time out so the first prompt receives the complete available tool
+catalog. `/mcps` shows connection errors; `-log api.log` records connection events.
+An empty conversation initializes Markdown rendering only when text is needed.
+The current terminal library can also wait up to five seconds for an unsupported
+background query before Hanoi's startup code runs; `-theme` cannot bypass this
+library initialization delay.
+
 ### System prompt and project instructions
 
 Hanoi has no built-in default system prompt. In the TUI, set one for subsequent
