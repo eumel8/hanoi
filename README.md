@@ -1,5 +1,7 @@
 # hanoi
 
+<img src="assets/hanoi-logo.svg" alt="Hanoi – AI harness in Go" width="640" />
+
 Basic AI harness in Go.
 
 ## Features
