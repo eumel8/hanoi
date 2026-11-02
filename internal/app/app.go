@@ -326,10 +326,9 @@ func runTUI(cfg config, memoryName string) error {
 	m.renderMarkdown("")
 	m.rebuildHistory()
 
-	// We only use wheel/click events. AllMotion also reports every pointer move;
-	// on terminals that lose SGR mouse parsing after a tool call, those events
-	// flood the chat input as literal [<35... sequences.
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Leave mouse reporting disabled so the terminal can select and copy text,
+	// including in WSL. Chat scrolling is available through keyboard shortcuts.
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	streamProgram = p
 	final, runErr := p.Run()
 	if model, ok := final.(tuiModel); ok && model.chatCancel != nil {
