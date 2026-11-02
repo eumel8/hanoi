@@ -18,6 +18,7 @@ Basic AI harness in Go.
 - optional API logging with `-log <file>`
 - live Hanoi Trace timeline in the TUI and optional structured JSONL export with `-trace <file>`
 - MCP tools from local and remote servers, with OpenCode-compatible config and `/mcps` management
+- local and global Agent Skills with an interactive `/skills` picker
 - tag-based `-version` output and GitHub Actions builds for Linux, macOS, and Windows
 
 ## Code structure
@@ -31,6 +32,7 @@ internal/
   app/               Application wiring, agent loop, API client, MCP and TUI
   config/            Provider settings and OpenCode-compatible config loading
   doctor/            Local runtime and writable-storage checks
+  skills/            Agent Skills discovery, YAML metadata and instruction loading
   tools/             Bash execution, process cancellation and tool-result storage
   trace/             Lifecycle events, run correlation and JSONL recording
 ```
@@ -268,6 +270,7 @@ Inside TUI:
 - `/connect github-copilot` logs in to GitHub Copilot; `/logout github-copilot` removes its local login
 - `/system <text>` sets the system prompt
 - `/mcps` opens MCP server management
+- `/skills` lists available skills; select with `↑`/`↓` and `Enter`, or use `/skills <name>` directly
 - `/trace` or `Ctrl+T` toggles the live trace timeline, including while a response is running;
   `Esc` returns to chat and restores its scroll position
 - `/doctor` checks the local runtime, storage, active model, configuration/log paths,
@@ -275,6 +278,49 @@ Inside TUI:
 - `/help` shows commands
 
 <img src="example.png" alt="hanoi" />
+
+### Skills
+
+Store reusable instructions in the [Agent Skills format](https://agentskills.io/specification):
+
+```text
+~/.hanoi/skills/<name>/SKILL.md     Global skills for every workspace
+./.hanoi/skills/<name>/SKILL.md    Skills for the launch directory
+```
+
+Hanoi combines both locations, sorted by name. A workspace skill overrides a
+global skill with the same name. Each skill lives in its own directory, with
+YAML frontmatter and Markdown instructions:
+
+```markdown
+---
+name: code-review
+description: Review code changes for correctness and maintainability.
+---
+
+Read the current diff, explain any bugs found, and suggest focused improvements.
+```
+
+The name must match the directory name and contain at most 64 lowercase letters,
+digits and single hyphens, with no leading or trailing hyphen. The description
+must contain 1–1024 characters. YAML multiline descriptions are supported;
+additional metadata fields are accepted. `SKILL.md` must be UTF-8, no larger than
+1 MiB, and contain nonempty instructions after the frontmatter.
+
+In the TUI, `/skills` opens the list with names, descriptions and file paths:
+
+- `↑`/`↓` and `Enter`: load the selected skill and send its instructions to the model
+- `r`: refresh the list; it is also refreshed each time `/skills` opens
+- `Esc`: return to chat without loading a skill
+- `/skills code-review`: load and send a skill directly
+
+The skill is sent as a user message in the current conversation, retaining the
+system prompt and using normal streaming, tool calling and session persistence.
+Its absolute file path and base directory accompany the instructions, so the
+model can resolve relative references such as `references/guide.md` or
+`scripts/check.sh` through the Bash tool. Additional files and scripts are not
+loaded or executed by the picker itself. Invalid skills are reported in the
+picker while valid entries remain available. No skill is loaded automatically.
 
 ### Runtime diagnostics
 

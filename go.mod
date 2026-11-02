@@ -11,6 +11,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	golang.org/x/oauth2 v0.35.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

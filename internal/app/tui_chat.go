@@ -14,7 +14,7 @@ import (
 var slashCommands = []string{
 	"/clear", "/connect", "/doctor", "/exit", "/help", "/logout",
 	"/mcps", "/model", "/models", "/new", "/providers", "/quit",
-	"/save", "/sessions", "/system", "/trace",
+	"/save", "/sessions", "/skills", "/system", "/trace",
 }
 
 func slashMatches(prefix string) []string {
