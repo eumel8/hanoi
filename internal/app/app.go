@@ -618,7 +618,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streaming == "" {
 			return m, nil
 		}
-		m.streamRendered = m.renderMarkdown(m.streaming)
+		m.streamRendered = m.renderStreamMarkdown(m.streaming)
 		m.streamDisplayFull = len(m.streaming) >= maxTUIDisplayBytes
 		m.refreshChat()
 		return m, nil
@@ -796,17 +796,25 @@ func (m *tuiModel) rebuildHistory() {
 		}
 	}
 	if m.streaming != "" {
-		m.streamRendered = m.renderMarkdown(m.streaming)
+		m.streamRendered = m.renderStreamMarkdown(m.streaming)
 	}
 	m.refreshChat()
 }
 
 func (m *tuiModel) renderMarkdown(text string) string {
+	return m.renderMarkdownLimit(text, maxTUIMarkdownBytes)
+}
+
+func (m *tuiModel) renderStreamMarkdown(text string) string {
+	return m.renderMarkdownLimit(text, maxTUIStreamMarkdownBytes)
+}
+
+func (m *tuiModel) renderMarkdownLimit(text string, limit int) string {
 	text = tuiDisplayText(text)
 	if text == "" {
 		return ""
 	}
-	if len(text) > maxTUIMarkdownBytes {
+	if len(text) > limit {
 		return text
 	}
 	if m.markdown == nil {
@@ -1132,6 +1140,14 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (te
 			return "", err
 		}
 		out.WriteString(msg.Content)
+		if len(msg.ToolCalls) > 0 && msg.Content != "" {
+			// Keep text from different tool rounds apart so Markdown blocks such as
+			// tables do not attach to the last line of the previous round.
+			out.WriteString("\n\n")
+			if onChunk != nil {
+				onChunk("\n\n")
+			}
+		}
 		if len(msg.ToolCalls) == 0 {
 			if onChunk != nil {
 				onChunk("\n")

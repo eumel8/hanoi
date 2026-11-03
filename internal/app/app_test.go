@@ -203,7 +203,7 @@ func TestStreamingToolFollowup(t *testing.T) {
 			text, err := sendStreamingChat(config{Config: appconfig.Config{APIKey: "test", Model: "test", BaseURL: server.URL}, AgentInstructions: "Project rules"}, messages, func(piece string) {
 				chunks.WriteString(piece)
 			})
-			want := strings.Repeat("Checking.", rounds) + "hello"
+			want := strings.Repeat("Checking.\n\n", rounds) + "hello"
 			if err != nil || text != want || chunks.String() != want+"\n" || requests != rounds+1 {
 				t.Fatalf("text=%q chunks=%q requests=%d err=%v", text, chunks.String(), requests, err)
 			}

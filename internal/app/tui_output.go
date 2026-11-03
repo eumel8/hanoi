@@ -9,7 +9,12 @@ import (
 )
 
 const maxTUIDisplayBytes = 32 * 1024
-const maxTUIMarkdownBytes = 8 * 1024
+
+// Rendering costs roughly 2.5ms per KB. The live stream preview is re-rendered
+// every 80ms, so it stays small; finished answers are rendered once up to the
+// display limit.
+const maxTUIMarkdownBytes = maxTUIDisplayBytes
+const maxTUIStreamMarkdownBytes = 8 * 1024
 
 // Bound work before stripping control sequences or parsing Markdown. The full
 // response remains in messages/session storage; this only limits its display.

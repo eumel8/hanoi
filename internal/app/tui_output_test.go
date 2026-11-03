@@ -66,3 +66,19 @@ func TestLargeStreamingResponseDisplayBounded(t *testing.T) {
 		t.Fatal("large response escaped viewport")
 	}
 }
+
+func TestFinishedAnswerRendersMarkdownBeyondStreamLimit(t *testing.T) {
+	m := tuiModel{width: 120, height: 40, textarea: textarea.New(), viewport: viewport.New(60, 10)}
+	m.resizeChat()
+	table := "| Name | Status |\n|---|---|\n| alpha | OK |\n| beta | OK |\n\n"
+	text := strings.Repeat("filler line to grow the answer past the stream limit\n\n", 200) + table
+	if len(text) <= maxTUIStreamMarkdownBytes || len(text) >= maxTUIMarkdownBytes {
+		t.Fatalf("test text must sit between the stream and final limits, got %d bytes", len(text))
+	}
+	if final := m.renderMarkdown(text); strings.Contains(final, "|---|---|") {
+		t.Fatal("finished answers up to the display limit must be rendered as Markdown")
+	}
+	if stream := m.renderStreamMarkdown(text); !strings.Contains(stream, "|---|---|") {
+		t.Fatal("the live preview must stay cheap and skip Markdown rendering for large text")
+	}
+}
