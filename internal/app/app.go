@@ -135,6 +135,7 @@ type tuiModel struct {
 	activitySince    time.Time
 	activityTicker   bool
 	lastScrollKey    string
+	lastScrollAt     time.Time
 	streamRendered   string
 	markdown         *glamour.TermRenderer
 	err              string
@@ -459,7 +460,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetYOffset(m.chatOffset)
 				m.userScrolled = !m.viewport.AtBottom()
 			} else if m.scrollChat(msg) {
-				m.userScrolled = true
+				m.userScrolled = !m.viewport.AtBottom()
 			}
 			return m, nil
 		}
@@ -468,7 +469,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.scrollChat(msg) {
-			m.userScrolled = true
+			m.userScrolled = !m.viewport.AtBottom()
 			m.refreshChat()
 			return m, nil
 		}
@@ -627,18 +628,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.mcpBusy {
 			// Explicitly handle scroll wheel events for WSL/Touchpad compatibility.
 			switch tea.MouseMsg(msg).Button {
-			case tea.MouseButtonWheelUp:
-				m.userScrolled = true
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelLeft:
 				m.viewport.LineUp(3)
-			case tea.MouseButtonWheelDown:
-				m.userScrolled = true
+				m.userScrolled = !m.viewport.AtBottom()
+			case tea.MouseButtonWheelDown, tea.MouseButtonWheelRight:
 				m.viewport.LineDown(3)
-			case tea.MouseButtonWheelLeft:
-				m.userScrolled = true
-				m.viewport.LineUp(3)
-			case tea.MouseButtonWheelRight:
-				m.userScrolled = true
-				m.viewport.LineDown(3)
+				m.userScrolled = !m.viewport.AtBottom()
 			default:
 				m.viewport, _ = m.viewport.Update(msg)
 			}

@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -169,21 +170,27 @@ func (m tuiModel) chatViewport() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, m.viewport.View(), " ", strings.Join(bar, "\n"))
 }
 
+// scrollJumpWindow is how quickly a second Ctrl+Up/Down press must follow the
+// first one to jump to the top/bottom instead of scrolling three lines.
+const scrollJumpWindow = 400 * time.Millisecond
+
 func (m *tuiModel) scrollChat(key tea.KeyMsg) bool {
 	k := key.String()
+	now := time.Now()
+	doubled := m.lastScrollKey == k && now.Sub(m.lastScrollAt) <= scrollJumpWindow
 	switch k {
 	case "pgup":
 		m.viewport.PageUp()
 	case "pgdown":
 		m.viewport.PageDown()
 	case "ctrl+up":
-		if m.lastScrollKey == "ctrl+up" {
+		if doubled {
 			m.viewport.GotoTop()
 		} else {
 			m.viewport.LineUp(3)
 		}
 	case "ctrl+down":
-		if m.lastScrollKey == "ctrl+down" {
+		if doubled {
 			m.viewport.GotoBottom()
 		} else {
 			m.viewport.LineDown(3)
@@ -191,7 +198,7 @@ func (m *tuiModel) scrollChat(key tea.KeyMsg) bool {
 	default:
 		return false
 	}
-	m.lastScrollKey = k
+	m.lastScrollKey, m.lastScrollAt = k, now
 	return true
 }
 
