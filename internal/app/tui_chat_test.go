@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -134,5 +135,65 @@ func TestToolActivityStatus(t *testing.T) {
 	m = updated.(tuiModel)
 	if !strings.Contains(m.View(), "running tool: bash") || strings.Contains(m.View(), "streaming...") {
 		t.Fatal("tool execution must not be displayed as model streaming")
+	}
+}
+
+func newScrollModel() tuiModel {
+	m := tuiModel{
+		width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10),
+		history: []string{strings.Repeat("chat line\n", 100)}, loading: true,
+	}
+	m.textarea.SetHeight(4)
+	m.resizeChat()
+	m.refreshChat()
+	return m
+}
+
+func TestCtrlUpJumpsToTopOnlyOnQuickDoublePress(t *testing.T) {
+	m := newScrollModel()
+	start := m.viewport.YOffset
+	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	if m.viewport.YOffset != start-3 {
+		t.Fatalf("single Ctrl+Up must scroll three lines, offset %d -> %d", start, m.viewport.YOffset)
+	}
+	// A second press after the jump window is a normal three-line scroll.
+	m.lastScrollAt = time.Now().Add(-2 * scrollJumpWindow)
+	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	if m.viewport.YOffset != start-6 {
+		t.Fatalf("slow second Ctrl+Up must not jump, offset %d", m.viewport.YOffset)
+	}
+	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	if !m.viewport.AtTop() {
+		t.Fatal("quick double Ctrl+Up must jump to the top")
+	}
+}
+
+func TestScrollBackToBottomResumesFollowing(t *testing.T) {
+	var model tea.Model = newScrollModel()
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m := model.(tuiModel)
+	if !m.viewport.AtBottom() || m.userScrolled {
+		t.Fatalf("reaching the bottom must resume following, atBottom=%v userScrolled=%v", m.viewport.AtBottom(), m.userScrolled)
+	}
+	m.streaming = strings.Repeat("new\n", 30)
+	m.streamRendered = m.streaming
+	m.refreshChat()
+	if !m.viewport.AtBottom() {
+		t.Fatal("streamed lines must stay visible after scrolling back to the bottom")
+	}
+}
+
+func TestMouseWheelBackToBottomResumesFollowing(t *testing.T) {
+	var model tea.Model = newScrollModel()
+	model, _ = model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m := model.(tuiModel)
+	if !m.userScrolled {
+		t.Fatal("wheel up must pause following")
+	}
+	model, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m = model.(tuiModel)
+	if !m.viewport.AtBottom() || m.userScrolled {
+		t.Fatalf("wheel down to the bottom must resume following, atBottom=%v userScrolled=%v", m.viewport.AtBottom(), m.userScrolled)
 	}
 }
