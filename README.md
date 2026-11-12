@@ -284,8 +284,10 @@ Inside TUI:
 ### Terminal colors and startup
 
 Hanoi inherits the terminal's default foreground and background for ordinary
-text, hints and the input area. It does not paint a separate input-line
-background. Accent colors and Markdown highlighting adapt to light or dark
+text, hints, the top status/header and the input area. The status/header is
+highlighted with bold text only, so it remains readable with custom terminal
+palettes even if background detection is inaccurate. Hanoi does not paint a
+separate input-line background. Accent colors and Markdown highlighting adapt to light or dark
 backgrounds, and Markdown uses the terminal's detected color capabilities.
 
 The default `-theme auto` uses `COLORFGBG` when available, otherwise the terminal
