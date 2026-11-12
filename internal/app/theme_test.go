@@ -63,3 +63,43 @@ func TestTerminalColorsInheritedByInputAndMarkdown(t *testing.T) {
 		t.Fatalf("no-color terminal received color escapes: %q", got)
 	}
 }
+
+// The status must use terminal defaults, even when the detected theme is wrong
+// for a custom palette. Do not reintroduce a blue foreground here.
+func TestStatusInheritsTerminalColors(t *testing.T) {
+	if _, ok := headStyle.GetForeground().(lipgloss.NoColor); !ok {
+		t.Fatal("status overrides terminal foreground")
+	}
+	if _, ok := headStyle.GetBackground().(lipgloss.NoColor); !ok {
+		t.Fatal("status overrides terminal background")
+	}
+	if !headStyle.GetBold() {
+		t.Fatal("status should remain visually emphasized")
+	}
+	for _, dark := range []bool{false, true} {
+		for _, profile := range []termenv.Profile{termenv.Ascii, termenv.ANSI, termenv.ANSI256, termenv.TrueColor} {
+			renderer := lipgloss.NewRenderer(&strings.Builder{})
+			renderer.SetHasDarkBackground(dark)
+			renderer.SetColorProfile(profile)
+			got := headStyle.Renderer(renderer).Render("Hanoi status")
+			want := "\x1b[1mHanoi status\x1b[0m"
+			if profile == termenv.Ascii {
+				want = "Hanoi status"
+			}
+			if got != want {
+				t.Errorf("dark=%v profile=%v: got %q, want %q", dark, profile, got, want)
+			}
+		}
+	}
+}
+
+func TestTUIAccentColorsAreAdaptive(t *testing.T) {
+	for name, style := range map[string]lipgloss.Style{
+		"user": userStyle, "assistant": botStyle, "error": errStyle, "warning": warnStyle,
+	} {
+		color, ok := style.GetForeground().(lipgloss.AdaptiveColor)
+		if !ok || color.Light == "" || color.Dark == "" || color.Light == color.Dark {
+			t.Errorf("%s should have distinct light and dark accent colors", name)
+		}
+	}
+}

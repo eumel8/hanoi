@@ -171,8 +171,10 @@ type tuiModel struct {
 }
 
 var (
-	appStyle      = lipgloss.NewStyle().Padding(1, 2)
-	headStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#1d4ed8", Dark: "#93c5fd"})
+	appStyle = lipgloss.NewStyle().Padding(1, 2)
+	// Keep the status readable even with a custom terminal palette or an
+	// inaccurate background detection: inherit the default text color.
+	headStyle     = lipgloss.NewStyle().Bold(true)
 	userStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"})
 	botStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#0e7490", Dark: "#67e8f9"})
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#b91c1c", Dark: "#fca5a5"})
