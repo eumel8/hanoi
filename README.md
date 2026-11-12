@@ -22,6 +22,50 @@ Basic AI harness in Go.
 - local and global Agent Skills with an interactive `/skills` picker
 - tag-based `-version` output and GitHub Actions builds for Linux, macOS, and Windows
 
+## Security and Cyber Gym usage
+
+> **Warning:** Hanoi intentionally lets the model execute local commands via
+> `bash -lc` without per-command user approval. It intentionally provides no
+> application-level file-access permission gate or workspace confinement.
+> These are features for a trusted, operator-controlled Cyber Gym, not a secure
+> sandbox for untrusted model output.
+
+Bash commands run with the privileges of the user running Hanoi and inherit its
+process environment. A model can therefore read, create, modify or delete any
+file that this user can access, run programs and use available network access.
+Tool results are sent back to the selected model provider; commands can expose
+credentials, environment variables and private file contents. A compromised
+provider or prompt injection in repository files, logs or other tool output can
+turn this intended capability into unintended actions or data disclosure.
+
+**No Hanoi-level file-access restrictions does not mean OS permissions are
+removed.** Normal operating-system permissions still apply. Hanoi also uses
+restrictive permissions for some files it creates, such as saved tool results;
+these protect those stored files, but do not restrict what Bash can access.
+The tool working directory is only a starting directory, not a filesystem
+boundary: commands can use absolute paths or change directories.
+
+**WSL alone is not a security sandbox.** Depending on its configuration, WSL can
+access Windows files through mounted drives (such as `/mnt/c`) and invoke Windows
+programs through interoperability. Running Hanoi in WSL does not by itself
+isolate the Windows host, credentials or other reachable systems.
+
+For Cyber Gym exercises:
+
+- Use a disposable, isolated VM or a carefully restricted container, with an
+  unprivileged user and only the required test files and network targets exposed.
+- Do not expose host home directories, production credentials, SSH agents,
+  privileged sockets or sensitive environment variables to the exercise.
+- If using WSL, explicitly review Windows drive mounts and interoperability;
+  do not rely on the default setup as the isolation boundary.
+- Use test credentials, snapshots/backups and an explicitly authorized target
+  scope. Assume model-driven commands can destroy data available to that user.
+- Review project configuration before launching Hanoi: enabled local MCP servers
+  can also start programs with the user's privileges.
+
+Isolation and authorization must be enforced outside Hanoi. Prompt instructions,
+working-directory choices and command timeouts are not security boundaries.
+
 ## Code structure
 
 Hanoi uses one Go module with focused internal packages:
@@ -843,6 +887,10 @@ OPENAI_API_KEY=... OPENAI_MODEL=... OPENAI_BASE_URL=https://host/v1/chat/complet
 ```
 
 ## Tool calling
+
+**Security:** Model-selected commands run without per-command approval or
+Hanoi-level file-access restrictions. Read [Security and Cyber Gym usage](#security-and-cyber-gym-usage)
+before enabling access to sensitive files or systems.
 
 `hanoi` now sends an OpenAI-compatible `bash` tool with each request. If the model decides to call it, the command is executed locally via `bash -lc`, and the tool result is sent back to the model as a follow-up tool message.
 
