@@ -135,8 +135,7 @@ type tuiModel struct {
 	activityLabel    string
 	activitySince    time.Time
 	activityTicker   bool
-	lastScrollKey    string
-	lastScrollAt     time.Time
+	mouseEnabled     bool
 	streamRendered   string
 	markdown         *glamour.TermRenderer
 	err              string
@@ -349,8 +348,8 @@ func runTUI(cfg config, memoryName string) error {
 	m.resizeChat()
 	m.rebuildHistory()
 
-	// Leave mouse reporting disabled so the terminal can select and copy text,
-	// including in WSL. Chat scrolling is available through keyboard shortcuts.
+	// Leave mouse reporting off so terminals (including Windows Terminal/WSL)
+	// can select chat text normally. Ctrl+G opts into application wheel scrolling.
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	streamProgram = p
 	final, runErr := p.Run()
@@ -468,6 +467,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+t" || (m.traceOpen && msg.String() == "esc") {
 			m.toggleTrace()
 			return m, nil
+		}
+		if msg.String() == "ctrl+g" {
+			m.mouseEnabled = !m.mouseEnabled
+			m.resizeChat()
+			if m.mouseEnabled {
+				return m, tea.EnableMouseCellMotion
+			}
+			return m, tea.DisableMouse
 		}
 		if m.scrollChat(msg) {
 			m.userScrolled = !m.viewport.AtBottom()
@@ -626,18 +633,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		if !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.mcpBusy {
+		if m.mouseEnabled && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.mcpBusy {
 			// Explicitly handle scroll wheel events for WSL/Touchpad compatibility.
 			switch tea.MouseMsg(msg).Button {
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelLeft:
 				m.viewport.LineUp(3)
-				m.userScrolled = !m.viewport.AtBottom()
 			case tea.MouseButtonWheelDown, tea.MouseButtonWheelRight:
 				m.viewport.LineDown(3)
-				m.userScrolled = !m.viewport.AtBottom()
 			default:
 				m.viewport, _ = m.viewport.Update(msg)
 			}
+			m.userScrolled = !m.viewport.AtBottom()
 		}
 		return m, nil
 
@@ -726,7 +732,6 @@ func (m *tuiModel) toolTickCmd() tea.Cmd {
 }
 
 func (m tuiModel) View() string {
-	header := m.chatHeader()
 	body := m.chatViewport()
 	if m.mcpOpen {
 		body = m.mcpView()
@@ -739,6 +744,13 @@ func (m tuiModel) View() string {
 		body = m.skillView()
 	}
 
+	return m.renderChatLayout(body)
+}
+
+// renderChatLayout is shared with resizeChat so all chrome, including wrapped
+// headers and both framed boxes, is included in the viewport height budget.
+func (m tuiModel) renderChatLayout(body string) string {
+	header := m.chatHeader()
 	status := hintStyle.Render("ready")
 	if m.loading {
 		activity := m.activity
@@ -754,11 +766,7 @@ func (m tuiModel) View() string {
 		status = m.spinner.View() + " running diagnostics..."
 	}
 	if m.err != "" {
-		if strings.HasPrefix(m.err, "Commands:") {
-			status = errStyle.Render(m.err)
-		} else {
-			status = errStyle.Render(tuiStatusText(m.err, max(1, m.width-6)))
-		}
+		status = errStyle.Render(tuiStatusText(m.err, max(1, m.width-6)))
 	}
 	if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.doctorOpen {
 		if suggestions := m.slashSuggestions(); len(suggestions) > 0 {
@@ -769,10 +777,10 @@ func (m tuiModel) View() string {
 	content := strings.Join([]string{
 		strings.Join(header, "\n"),
 		"",
-		boxStyle.Width(max(20, m.width-6)).Render(body),
+		boxStyle.Width(max(1, m.width-6)).Render(body),
 		"",
 		status,
-		boxStyle.Width(max(20, m.width-6)).Render(m.textarea.View()),
+		boxStyle.Width(max(1, m.width-6)).Render(m.textarea.View()),
 	}, "\n")
 
 	return appStyle.Render(content)
@@ -959,7 +967,13 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		m.textarea.SetValue("")
 		return m.handleSkillsCommand(arg)
 	case "/help":
-		m.err = "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /skills [name] /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · 2x Ctrl+↑↓ (top/bottom) · Ctrl+T (trace) · ↑/↓ (input history)"
+		// Keep the full help scrollable instead of expanding the status line.
+		help := "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /skills [name] /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · PgUp/PgDown · Ctrl+Home/End (top/bottom) · Ctrl+G (mouse mode) · Ctrl+T (trace) · ↑/↓ (input history)"
+		m.err = ""
+		m.history = append(m.history, hintStyle.Render(help))
+		m.userScrolled = false
+		m.refreshChat()
+		m.viewport.GotoBottom()
 		return m, nil
 	case "/doctor":
 		if arg != "" && arg != "provider" {
