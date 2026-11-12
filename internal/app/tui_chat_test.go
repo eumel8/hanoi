@@ -107,8 +107,7 @@ func TestChatScrollDuringStreaming(t *testing.T) {
 	if lipgloss.Height(m.View()) > m.height {
 		t.Fatal("chat layout exceeds the terminal height")
 	}
-	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlDown})
-	m.scrollChat(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlEnd})
 	if !m.viewport.AtBottom() {
 		t.Fatal("Ctrl+End must resume following")
 	}
@@ -134,5 +133,90 @@ func TestToolActivityStatus(t *testing.T) {
 	m = updated.(tuiModel)
 	if !strings.Contains(m.View(), "running tool: bash") || strings.Contains(m.View(), "streaming...") {
 		t.Fatal("tool execution must not be displayed as model streaming")
+	}
+}
+
+func TestRepeatedCtrlArrowsScrollOnlyThreeLines(t *testing.T) {
+	m := tuiModel{width: 100, height: 40, textarea: textarea.New(), viewport: viewport.New(60, 10), history: []string{strings.Repeat("chat line\n", 200)}}
+	m.textarea.SetHeight(4)
+	m.resizeChat()
+	m.refreshChat()
+	bottom := m.viewport.YOffset
+	for i := 1; i <= 4; i++ {
+		m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlUp})
+		if got, want := m.viewport.YOffset, bottom-3*i; got != want {
+			t.Fatalf("Ctrl+Up #%d: offset %d, want %d", i, got, want)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlDown})
+	}
+	if !m.viewport.AtBottom() || m.userScrolled {
+		t.Fatal("scrolling back to the bottom must resume following")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlHome})
+	if m.viewport.YOffset != 0 || !m.userScrolled {
+		t.Fatal("Ctrl+Home must jump to the top and pause following")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if !m.viewport.AtBottom() || m.userScrolled {
+		t.Fatal("Ctrl+End must jump to the bottom and resume following")
+	}
+}
+
+func TestChatUsesAvailableTerminalHeight(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{80, 30}, {120, 50}, {60, 25}, {40, 30}} {
+		m := tuiModel{textarea: textarea.New(), viewport: viewport.New(70, 10), messages: []message{{Role: "assistant", Content: strings.Repeat("chat line\n", 100)}}}
+		m.textarea.SetHeight(4)
+		m = updateModel(m, tea.WindowSizeMsg{Width: size.width, Height: size.height})
+		view := m.View()
+		if got := lipgloss.Height(view); got != size.height {
+			t.Errorf("%dx%d: rendered height %d, want %d", size.width, size.height, got, size.height)
+		}
+		if got := lipgloss.Width(view); got > size.width {
+			t.Errorf("%dx%d: rendered width %d exceeds terminal", size.width, size.height, got)
+		}
+		if size.height == 50 && m.viewport.Height <= 10 {
+			t.Fatal("large terminal still limited to ten chat lines")
+		}
+	}
+}
+
+func TestMouseReportingIsOptIn(t *testing.T) {
+	m := tuiModel{textarea: textarea.New(), viewport: viewport.New(60, 10)}
+	m.viewport.SetContent(strings.Repeat("chat line\n", 100))
+	m.viewport.SetYOffset(30)
+	wheel := tea.MouseMsg{Button: tea.MouseButtonWheelUp}
+	m = updateModel(m, wheel)
+	if m.viewport.YOffset != 30 {
+		t.Fatal("default selection mode must not consume mouse wheel events")
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	m = updated.(tuiModel)
+	if !m.mouseEnabled || cmd == nil {
+		t.Fatal("Ctrl+G must enable application mouse reporting")
+	}
+	m = updateModel(m, wheel)
+	if m.viewport.YOffset != 27 {
+		t.Fatal("opt-in mouse mode must scroll three lines")
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
+	m = updated.(tuiModel)
+	if m.mouseEnabled || cmd == nil {
+		t.Fatal("Ctrl+G must restore native terminal selection")
+	}
+}
+
+func TestHelpIsScrollableAndFitsTerminal(t *testing.T) {
+	m := tuiModel{width: 60, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10)}
+	m.textarea.SetHeight(4)
+	m.resizeChat()
+	updated, _ := m.handleSlashCommand("/help")
+	m = updated.(tuiModel)
+	if !strings.Contains(strings.Join(m.history, "\n"), "Ctrl+Home/End") || m.err != "" {
+		t.Fatal("full help should be in the scrollable chat, not the status line")
+	}
+	if lipgloss.Height(m.View()) > m.height || lipgloss.Width(m.View()) > m.width {
+		t.Fatal("help escaped terminal bounds")
 	}
 }

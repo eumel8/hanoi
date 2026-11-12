@@ -248,8 +248,12 @@ Inside TUI:
 - `↑`/`↓` recalls earlier prompts and slash commands at the first/last input line;
   `Alt+↑`/`Alt+↓` recalls them from anywhere, preserving the current draft
   (session history, seeded from saved user messages when using `-memory`)
-- `PgUp`/`PgDown` or the mouse wheel scrolls the chat; `Ctrl+Home`/`Ctrl+End`
-  jumps to the beginning/end, with a scrollbar showing the current position
+- `Ctrl+↑`/`Ctrl+↓` scrolls three lines per press (including repeated presses);
+  `PgUp`/`PgDown` scrolls a page and `Ctrl+Home`/`Ctrl+End` jumps to the
+  beginning/end, with a scrollbar showing the current position
+- mouse reporting is off by default, allowing normal terminal text selection
+  and copying (including in Windows Terminal/WSL). `Ctrl+G` toggles mouse-wheel
+  scrolling; toggle it off again to select text normally
 - assistant responses stream live in the TUI
 - scrolling up pauses automatic following until you return to the bottom
 - Markdown headings, lists, tables, and syntax-highlighted code blocks render live,

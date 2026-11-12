@@ -108,6 +108,11 @@ func (m tuiModel) chatHeader() []string {
 		hintStyle.Render("Enter send · Esc Esc stop · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · /help"),
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
 	}
+	if m.mouseEnabled {
+		header[0] += hintStyle.Render(" · mouse scroll on (Ctrl+G: select text)")
+	} else {
+		header[0] += hintStyle.Render(" · text selection (Ctrl+G: mouse scroll)")
+	}
 	if m.memoryName != "" {
 		header = append(header, hintStyle.Render("session: "+m.memoryName))
 	}
@@ -120,16 +125,21 @@ func (m tuiModel) chatHeader() []string {
 	if m.doctorOpen {
 		header = append(header, headStyle.Render("Hanoi Doctor · Esc returns to chat"))
 	}
+	// Header text must not expand the layout beyond the terminal width. Its
+	// wrapped height is also used by resizeChat.
+	for i := range header {
+		header[i] = ansi.Hardwrap(header[i], max(1, m.width-appStyle.GetHorizontalFrameSize()), true)
+	}
 	return header
 }
 
 func (m *tuiModel) resizeChat() {
-	boxWidth := max(20, m.width-6)
+	boxWidth := max(1, m.width-appStyle.GetHorizontalFrameSize()-boxStyle.GetHorizontalBorderSize())
 	m.textarea.SetWidth(max(1, boxWidth-boxStyle.GetHorizontalPadding()))
 	m.viewport.Width = max(1, boxWidth-boxStyle.GetHorizontalPadding()-2)
-	headerHeight := lipgloss.Height(strings.Join(m.chatHeader(), "\n"))
-	// Outer padding, two borders, two blank lines, status, and input area.
-	m.viewport.Height = max(1, m.height-headerHeight-m.textarea.Height()-9)
+	// An empty body occupies one line; replace it with all remaining rows.
+	chromeHeight := lipgloss.Height(m.renderChatLayout("")) - 1
+	m.viewport.Height = max(1, m.height-chromeHeight)
 }
 
 func (m *tuiModel) refreshChat() {
@@ -174,21 +184,16 @@ func (m *tuiModel) scrollChat(key tea.KeyMsg) bool {
 	case "pgdown":
 		m.viewport.PageDown()
 	case "ctrl+up":
-		if m.lastScrollKey == "ctrl+up" {
-			m.viewport.GotoTop()
-		} else {
-			m.viewport.LineUp(3)
-		}
+		m.viewport.LineUp(3)
 	case "ctrl+down":
-		if m.lastScrollKey == "ctrl+down" {
-			m.viewport.GotoBottom()
-		} else {
-			m.viewport.LineDown(3)
-		}
+		m.viewport.LineDown(3)
+	case "ctrl+home":
+		m.viewport.GotoTop()
+	case "ctrl+end":
+		m.viewport.GotoBottom()
 	default:
 		return false
 	}
-	m.lastScrollKey = k
 	return true
 }
 
