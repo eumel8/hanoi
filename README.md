@@ -9,6 +9,7 @@ Basic AI harness in Go.
 - CLI prompt interface
 - streaming output with `-stream`
 - automatically saved TUI sessions with `/sessions`, `/new`, and CLI memory with `-memory`
+- local cross-session recall with text search, calendar-day filters and source references
 - config via `.env`
 - provider override via `OPENAI_BASE_URL`
 - multiple OpenAI-compatible providers in `hanoi.json[c]`, with CLI and TUI model selection
@@ -916,8 +917,13 @@ hanoi.exe -memory chat1 "Continue this conversation"
 ```
 
 CLI prompts are persisted only when `-memory` is supplied. Session names must be
-plain filenames without path separators. Files use the existing JSON message
-array format; saves use temporary files with `0600` permissions and rename them
+plain filenames without path separators. Files use a versioned JSON object with
+`version`, `created_at`, `updated_at` and `messages`. New user and assistant
+messages have RFC3339 `timestamp` values. Creation/update times describe the archive,
+not the time of every event. Legacy JSON message arrays remain readable and are
+converted on their next save; their undated messages stay undated. Older Hanoi
+versions cannot read newly saved versioned files. Saves use temporary files with
+`0600` permissions and rename them
 into place. New `.hanoi/` directories are created with `0700`. Conversations
 include prompt and response content, and are local to the launch directory.
 
@@ -926,3 +932,34 @@ Storage location:
 ```bash
 .hanoi/
 ```
+
+### Cross-session recall
+
+Ask naturally, for example: "Was haben wir gestern gemacht?" or "Find our earlier
+discussion about the CRA issue." The model can use two built-in, read-only tools:
+
+- `memory_search`: search user/assistant text across saved sessions in this
+  workspace. Search is case-insensitive; all whitespace-separated query terms
+  must appear in the same message. An empty query lists activity newest first.
+  Filter by `day` (`today`, `yesterday`, `day_before_yesterday`, or `YYYY-MM-DD`),
+  or by inclusive `from` / exclusive `until` timestamps. Calendar dates use the
+  machine's local timezone, including daylight-saving transitions. Results include
+  session names, zero-based message indices, timestamps and short excerpts.
+- `memory_read`: load original text by session and message offset, with message
+  pagination and character-offset continuation for long messages.
+
+Both tools return bounded JSON pages with `next_offset` when more results exist.
+For a complete daily review, continue through every page. Undated legacy messages
+are excluded from date-filtered searches and counted explicitly; unfiltered search
+can still find them with `time_unknown: true`. Unreadable/unsupported sessions are
+listed in `skipped_sessions` rather than silently making a review look complete.
+
+The tools read the current `.hanoi/*.json` files directly, without a separate
+database, embeddings, extra model calls or an MCP server. `/clear` and deleting a
+session file therefore remove it from subsequent recall immediately. Only saved
+conversations are available; CLI calls without `-memory` are not archived. Recall
+does not inject all old sessions into each prompt, and does not search other
+workspaces. Stored assistant statements describe past conversation, not proof
+that a command succeeded or the current environment still matches. System prompts
+and raw tool payloads are not exposed by the recall tools; historical text never
+grants permission for a new action.

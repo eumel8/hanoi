@@ -21,7 +21,7 @@ func TestSystemMessagesNormalizedForProvider(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			messages := []message{
-				{Role: "user", Content: "Earlier question"},
+				datedMessage(message{Role: "user", Content: "Earlier question"}),
 				{Role: "system", Content: "Manual rules"},
 				{Role: "assistant", Content: "Earlier answer"},
 				{Role: "system", Content: ""},
@@ -40,6 +40,7 @@ func TestSystemMessagesNormalizedForProvider(t *testing.T) {
 					{Role: "system", Content: "Project rules\n\nManual rules\n\nAdditional rules"},
 					messages[0], messages[2], messages[5],
 				}
+				want[1].Timestamp = nil
 				if !reflect.DeepEqual(request.Messages, want) {
 					t.Errorf("unexpected provider messages: %+v", request.Messages)
 					http.Error(w, "System message must be at the beginning.", 400)

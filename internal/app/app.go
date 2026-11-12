@@ -31,6 +31,7 @@ import (
 )
 
 type message struct {
+	Timestamp      *time.Time        `json:"timestamp,omitempty"`
 	Role           string            `json:"role"`
 	Content        string            `json:"content"`
 	Name           string            `json:"name,omitempty"`
@@ -295,7 +296,7 @@ func Run(version string) error {
 	}
 
 	if *memory != "" {
-		messages = append(messages, message{Role: "assistant", Content: assistantText})
+		messages = append(messages, datedMessage(message{Role: "assistant", Content: assistantText}))
 		if err := saveMemory(*memory, messages); err != nil {
 			return fmt.Errorf("save memory: %w", err)
 		}
@@ -676,7 +677,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.streaming = ""
 		if msg.text != "" {
-			m.messages = append(m.messages, message{Role: "assistant", Content: msg.text})
+			m.messages = append(m.messages, datedMessage(message{Role: "assistant", Content: msg.text}))
 		}
 		if m.memoryName != "" {
 			if err := saveMemory(m.memoryName, m.messages); err != nil {
@@ -1017,7 +1018,9 @@ func appendMessage(messages []message, system string, user ...message) []message
 	if system == "" && keepEmpty {
 		filtered = append([]message{{Role: "system", Content: ""}}, filtered...)
 	}
-	filtered = append(filtered, user...)
+	for _, msg := range user {
+		filtered = append(filtered, datedMessage(msg))
+	}
 	return filtered
 }
 
@@ -1168,6 +1171,8 @@ func requestModel(cfg config, messages []message, stream bool, onChunk func(stri
 		instructions = append(instructions, cfg.AgentInstructions)
 	}
 	for _, msg := range messages {
+		// Local archive metadata is not part of either provider API.
+		msg.Timestamp = nil
 		if msg.Role == "system" {
 			// Empty system messages are session persistence markers only.
 			if msg.Content != "" {
@@ -1350,20 +1355,11 @@ func loadMemory(name string) ([]message, error) {
 	if err := validateMemoryName(name); err != nil {
 		return nil, err
 	}
-	path := memoryPath(name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+	archive, err := readMemoryArchive(name)
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
-
-	var messages []message
-	if err := json.Unmarshal(data, &messages); err != nil {
-		return nil, err
-	}
-	return messages, nil
+	return archive.Messages, err
 }
 
 func saveMemory(name string, messages []message) error {
@@ -1375,7 +1371,16 @@ func saveMemory(name string, messages []message) error {
 		return err
 	}
 
-	data, err := json.MarshalIndent(messages, "", "  ")
+	archive, err := readMemoryArchive(name)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	now := time.Now()
+	if archive.CreatedAt.IsZero() {
+		archive.CreatedAt = now
+	}
+	archive.Version, archive.UpdatedAt, archive.Messages = 1, now, messages
+	data, err := json.MarshalIndent(archive, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -1419,6 +1424,7 @@ func availableTools(cfg config) []tool {
 			},
 		},
 	}
+	tools = append(tools, memoryTools()...)
 	return append(tools, cfg.MCP.Tools()...)
 }
 
@@ -1441,6 +1447,8 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 			cfg.Logger.Printf("tool name=%q args=%q started", call.Function.Name, call.Function.Arguments)
 		}
 		switch call.Function.Name {
+		case "memory_search", "memory_read":
+			output, err = callMemoryTool(cfg.context(), call.Function.Name, call.Function.Arguments)
 		case "bash":
 			ctx, cancel := context.WithTimeout(cfg.context(), 30*time.Second)
 			output, err = tools.RunBashContext(ctx, call.Function.Arguments)
