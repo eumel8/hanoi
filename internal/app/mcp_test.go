@@ -248,8 +248,8 @@ func TestMCPChatIntegration(t *testing.T) {
 					w.WriteHeader(400)
 					return
 				}
-				if len(request.Tools) != 3 {
-					t.Errorf("expected bash + 2 MCP tools, got %d", len(request.Tools))
+				if len(request.Tools) != 5 {
+					t.Errorf("expected bash + 2 memory + 2 MCP tools, got %d", len(request.Tools))
 				}
 				var response message
 				if requests == 1 {

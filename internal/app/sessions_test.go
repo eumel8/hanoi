@@ -25,7 +25,7 @@ func TestSessionLifecycle(t *testing.T) {
 	m = updated.(tuiModel)
 	first := m.memoryName
 	messages, err := loadMemory(first)
-	if err != nil || first == "" || len(messages) != 1 || messages[0].Content != "First question" {
+	if err != nil || first == "" || len(messages) != 1 || messages[0].Content != "First question" || messages[0].Timestamp == nil {
 		t.Fatalf("prompt not saved: %v", err)
 	}
 	updated, _ = m.Update(chatResultMsg{text: "First answer"})
@@ -37,7 +37,7 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Fatal("new session did not reset conversation")
 	}
 	messages, err = loadMemory(first)
-	if err != nil || len(messages) != 2 {
+	if err != nil || len(messages) != 2 || messages[1].Timestamp == nil {
 		t.Fatal("previous conversation lost")
 	}
 	updated, _ = m.handleSlashCommand("/sessions")
