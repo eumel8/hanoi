@@ -1,5 +1,7 @@
 # hanoi
 
+<img src="assets/hanoi-logo.svg" alt="Hanoi – AI harness in Go" width="640" />
+
 Basic AI harness in Go.
 
 ## Features
@@ -7,6 +9,7 @@ Basic AI harness in Go.
 - CLI prompt interface
 - streaming output with `-stream`
 - automatically saved TUI sessions with `/sessions`, `/new`, and CLI memory with `-memory`
+- local cross-session recall with text search, calendar-day filters and source references
 - config via `.env`
 - provider override via `OPENAI_BASE_URL`
 - multiple OpenAI-compatible providers in `hanoi.json[c]`, with CLI and TUI model selection
@@ -16,6 +19,7 @@ Basic AI harness in Go.
 - optional API logging with `-log <file>`
 - live Hanoi Trace timeline in the TUI and optional structured JSONL export with `-trace <file>`
 - MCP tools from local and remote servers, with OpenCode-compatible config and `/mcps` management
+- local and global Agent Skills with an interactive `/skills` picker
 - tag-based `-version` output and GitHub Actions builds for Linux, macOS, and Windows
 
 ## Code structure
@@ -29,6 +33,7 @@ internal/
   app/               Application wiring, agent loop, API client, MCP and TUI
   config/            Provider settings and OpenCode-compatible config loading
   doctor/            Local runtime and writable-storage checks
+  skills/            Agent Skills discovery, YAML metadata and instruction loading
   tools/             Bash execution, process cancellation and tool-result storage
   trace/             Lifecycle events, run correlation and JSONL recording
 ```
@@ -266,8 +271,10 @@ Inside TUI:
 - `/model <provider/model>` switches provider and model (`/model <name>` switches within the active provider)
 - `/providers`, `/models`, or `/model` opens the provider/model picker and discovers Copilot models; `r` refreshes the list
 - `/connect github-copilot` logs in to GitHub Copilot; `/logout github-copilot` removes its local login
-- `/system <text>` sets the system prompt
+- `/system <text>` saves the system prompt for the active session and the workspace;
+  `/system` without text clears both (project instructions remain active)
 - `/mcps` opens MCP server management
+- `/skills` lists available skills; select with `↑`/`↓` and `Enter`, or use `/skills <name>` directly
 - `/trace` or `Ctrl+T` toggles the live trace timeline, including while a response is running;
   `Esc` returns to chat and restores its scroll position
 - `/doctor` checks the local runtime, storage, active model, configuration/log paths,
@@ -275,6 +282,127 @@ Inside TUI:
 - `/help` shows commands
 
 <img src="example.png" alt="hanoi" />
+
+### Terminal colors and startup
+
+Hanoi inherits the terminal's default foreground and background for ordinary
+text, hints and the input area. It does not paint a separate input-line
+background. Accent colors and Markdown highlighting adapt to light or dark
+backgrounds, and Markdown uses the terminal's detected color capabilities.
+
+The default `-theme auto` uses `COLORFGBG` when available, otherwise the terminal
+background detected by Lip Gloss. Under Linux/WSL that detection uses terminal
+queries; it is not a read of Windows Terminal's settings file. Native Windows
+executables cannot detect the background through the current library and default
+to dark unless `COLORFGBG` is available. If detection does not match your terminal,
+select the theme explicitly:
+
+```bash
+hanoi -tui -theme light
+hanoi -tui -theme dark
+```
+
+These flags select accent/highlighting styles; your terminal still controls the
+default text and background colors. Restart Hanoi after changing the terminal theme.
+
+Enabled MCP servers connect and discover tools concurrently at startup, rather
+than adding their individual delays together. Startup still waits for all servers
+to finish or time out so the first prompt receives the complete available tool
+catalog. `/mcps` shows connection errors; `-log api.log` records connection events.
+An empty conversation initializes Markdown rendering only when text is needed.
+The current terminal library can also wait up to five seconds for an unsupported
+background query before Hanoi's startup code runs; `-theme` cannot bypass this
+library initialization delay.
+
+### System prompt and project instructions
+
+Hanoi has no built-in default system prompt. In the TUI, set one for subsequent
+messages with `/system <text>`, for example:
+
+```text
+/system Answer concisely and in German.
+```
+
+The command clears the input, confirms the change and displays the active prompt
+in the header. It saves the text to `.hanoi/system.md` in the launch directory,
+using private permissions and a temporary-file/rename write. You can also edit
+this plain UTF-8 Markdown file yourself (at most 1 MiB); restart Hanoi to load it.
+The `.hanoi/` directory is already excluded from Git in this repository.
+
+This file provides the default prompt for CLI requests, new TUI sessions and
+older sessions without a saved system prompt. A session's saved prompt takes
+precedence over the workspace default and is restored when the session is resumed.
+`/system` without text empties the file and clears the active session's prompt;
+other saved sessions retain their prompts. An explicitly cleared session stays
+cleared even if a different workspace default is set later. `/new` uses the current
+workspace default. The prompt file is separate from `hanoi.json[c]`, so saving it
+does not rewrite provider/MCP settings or JSONC comments.
+
+For project-wide rules, add a standard Markdown [AGENTS.md](https://agents.md/)
+file to your project. At startup, Hanoi searches the launch directory and then
+its parents, loading only the nearest `AGENTS.md`. A nearer file takes precedence;
+other ancestor files and files in child directories are not loaded. An empty
+nearest file provides no rules. Files must be UTF-8 and at most 1 MiB;
+unreadable or invalid files cause a startup error instead of silently ignoring rules.
+
+The file content, absolute path and base directory are combined with the manual
+`/system` prompt into one system message at the beginning of every CLI and TUI
+model request, including streaming and tool follow-ups. Project instructions
+come first, followed by the manual prompt. This also supports providers that
+accept only one leading system message. The TUI header shows the loaded path.
+Clearing the manual prompt leaves `AGENTS.md` active. Project instructions
+stay active across session changes and are not copied into session files.
+Restart Hanoi to load changes to `AGENTS.md`. Its contents are included in API
+requests and in the API log when `-log` is enabled.
+
+The repository includes a generic Kubernetes operations [`AGENTS.md`](AGENTS.md):
+verify the target context, diagnose before changing, protect secrets, prefer
+GitOps-compatible changes and verify the outcome. Copy and adapt it to your own
+operations workspace. These are model instructions, not a tool permission
+enforcement mechanism.
+
+### Skills
+
+Store reusable instructions in the [Agent Skills format](https://agentskills.io/specification):
+
+```text
+~/.hanoi/skills/<name>/SKILL.md     Global skills for every workspace
+./.hanoi/skills/<name>/SKILL.md    Skills for the launch directory
+```
+
+Hanoi combines both locations, sorted by name. A workspace skill overrides a
+global skill with the same name. Each skill lives in its own directory, with
+YAML frontmatter and Markdown instructions:
+
+```markdown
+---
+name: code-review
+description: Review code changes for correctness and maintainability.
+---
+
+Read the current diff, explain any bugs found, and suggest focused improvements.
+```
+
+The name must match the directory name and contain at most 64 lowercase letters,
+digits and single hyphens, with no leading or trailing hyphen. The description
+must contain 1–1024 characters. YAML multiline descriptions are supported;
+additional metadata fields are accepted. `SKILL.md` must be UTF-8, no larger than
+1 MiB, and contain nonempty instructions after the frontmatter.
+
+In the TUI, `/skills` opens the list with names, descriptions and file paths:
+
+- `↑`/`↓` and `Enter`: load the selected skill and send its instructions to the model
+- `r`: refresh the list; it is also refreshed each time `/skills` opens
+- `Esc`: return to chat without loading a skill
+- `/skills code-review`: load and send a skill directly
+
+The skill is sent as a user message in the current conversation, retaining the
+system prompt and using normal streaming, tool calling and session persistence.
+Its absolute file path and base directory accompany the instructions, so the
+model can resolve relative references such as `references/guide.md` or
+`scripts/check.sh` through the Bash tool. Additional files and scripts are not
+loaded or executed by the picker itself. Invalid skills are reported in the
+picker while valid entries remain available. No skill is loaded automatically.
 
 ### Runtime diagnostics
 
@@ -777,8 +905,8 @@ or `/save`.
 - `/clear`: empty the active session, including its saved conversation. Use
   `/new` when you want to keep the previous conversation.
 
-Switching restores conversation messages and prompt-recall history, and resets
-the system-prompt override and session trace view. The selected provider/model
+Switching restores conversation messages, the saved manual system prompt and
+prompt-recall history, and resets the session trace view. The selected provider/model
 stays active. Stop an in-progress response before switching sessions. A failed
 save or unreadable destination leaves the current conversation open.
 
@@ -791,8 +919,13 @@ hanoi.exe -memory chat1 "Continue this conversation"
 ```
 
 CLI prompts are persisted only when `-memory` is supplied. Session names must be
-plain filenames without path separators. Files use the existing JSON message
-array format; saves use temporary files with `0600` permissions and rename them
+plain filenames without path separators. Files use a versioned JSON object with
+`version`, `created_at`, `updated_at` and `messages`. New user and assistant
+messages have RFC3339 `timestamp` values. Creation/update times describe the archive,
+not the time of every event. Legacy JSON message arrays remain readable and are
+converted on their next save; their undated messages stay undated. Older Hanoi
+versions cannot read newly saved versioned files. Saves use temporary files with
+`0600` permissions and rename them
 into place. New `.hanoi/` directories are created with `0700`. Conversations
 include prompt and response content, and are local to the launch directory.
 
@@ -801,3 +934,34 @@ Storage location:
 ```bash
 .hanoi/
 ```
+
+### Cross-session recall
+
+Ask naturally, for example: "Was haben wir gestern gemacht?" or "Find our earlier
+discussion about the CRA issue." The model can use two built-in, read-only tools:
+
+- `memory_search`: search user/assistant text across saved sessions in this
+  workspace. Search is case-insensitive; all whitespace-separated query terms
+  must appear in the same message. An empty query lists activity newest first.
+  Filter by `day` (`today`, `yesterday`, `day_before_yesterday`, or `YYYY-MM-DD`),
+  or by inclusive `from` / exclusive `until` timestamps. Calendar dates use the
+  machine's local timezone, including daylight-saving transitions. Results include
+  session names, zero-based message indices, timestamps and short excerpts.
+- `memory_read`: load original text by session and message offset, with message
+  pagination and character-offset continuation for long messages.
+
+Both tools return bounded JSON pages with `next_offset` when more results exist.
+For a complete daily review, continue through every page. Undated legacy messages
+are excluded from date-filtered searches and counted explicitly; unfiltered search
+can still find them with `time_unknown: true`. Unreadable/unsupported sessions are
+listed in `skipped_sessions` rather than silently making a review look complete.
+
+The tools read the current `.hanoi/*.json` files directly, without a separate
+database, embeddings, extra model calls or an MCP server. `/clear` and deleting a
+session file therefore remove it from subsequent recall immediately. Only saved
+conversations are available; CLI calls without `-memory` are not archived. Recall
+does not inject all old sessions into each prompt, and does not search other
+workspaces. Stored assistant statements describe past conversation, not proof
+that a command succeeded or the current environment still matches. System prompts
+and raw tool payloads are not exposed by the recall tools; historical text never
+grants permission for a new action.

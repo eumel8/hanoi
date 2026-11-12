@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"hanoi/internal/skills"
 	"hanoi/internal/tools"
 	"hanoi/internal/trace"
 
@@ -30,6 +31,7 @@ import (
 )
 
 type message struct {
+	Timestamp      *time.Time        `json:"timestamp,omitempty"`
 	Role           string            `json:"role"`
 	Content        string            `json:"content"`
 	Name           string            `json:"name,omitempty"`
@@ -162,17 +164,21 @@ type tuiModel struct {
 	sessionCursor int
 	sessions      []memorySession
 	autoSave      bool
+	skillsOpen    bool
+	skillCursor   int
+	skills        []skills.Skill
+	skillWarnings []string
 }
 
 var (
 	appStyle      = lipgloss.NewStyle().Padding(1, 2)
-	headStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	userStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
-	botStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
-	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	hintStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
+	headStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#1d4ed8", Dark: "#93c5fd"})
+	userStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#166534", Dark: "#86efac"})
+	botStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#0e7490", Dark: "#67e8f9"})
+	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#b91c1c", Dark: "#fca5a5"})
+	hintStyle     = lipgloss.NewStyle()
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#854d0e", Dark: "#fde047"})
+	boxStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	streamProgram *tea.Program
 )
 
@@ -189,11 +195,15 @@ func Run(version string) error {
 	authProvider := flag.String("auth", "", "log in to a provider (github-copilot)")
 	logoutProvider := flag.String("logout", "", "delete a provider login (github-copilot)")
 	listModels := flag.Bool("models", false, "discover and list available GitHub Copilot models")
+	theme := flag.String("theme", "auto", "terminal theme: auto, light or dark")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("hanoi " + version)
 		return nil
+	}
+	if err := configureTerminalTheme(*theme); err != nil {
+		return err
 	}
 	if *authProvider != "" || *logoutProvider != "" {
 		return runProviderAuth(*authProvider, *logoutProvider)
@@ -221,6 +231,18 @@ func Run(version string) error {
 		return err
 	}
 	cfg.LogPath, cfg.TracePath = *logPath, *tracePath
+	workspace, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("working directory: %w", err)
+	}
+	cfg.AgentInstructions, cfg.AgentInstructionsPath, err = loadAgentInstructions(workspace)
+	if err != nil {
+		return err
+	}
+	cfg.SystemPrompt, err = loadSystemPrompt()
+	if err != nil {
+		return err
+	}
 
 	if *logPath != "" {
 		file, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -262,7 +284,7 @@ func Run(version string) error {
 			return fmt.Errorf("load memory: %w", err)
 		}
 	}
-	messages = append(messages, message{Role: "user", Content: prompt})
+	messages = appendMessage(messages, sessionSystem(messages, cfg.SystemPrompt), message{Role: "user", Content: prompt})
 
 	assistantText, err := sendChat(cfg, messages, *stream)
 	if err != nil {
@@ -273,7 +295,7 @@ func Run(version string) error {
 	}
 
 	if *memory != "" {
-		messages = append(messages, message{Role: "assistant", Content: assistantText})
+		messages = append(messages, datedMessage(message{Role: "assistant", Content: assistantText}))
 		if err := saveMemory(*memory, messages); err != nil {
 			return fmt.Errorf("save memory: %w", err)
 		}
@@ -301,6 +323,7 @@ func runTUI(cfg config, memoryName string) error {
 	ta.ShowLineNumbers = false
 	ta.Prompt = "│ "
 	ta.CharLimit = 0
+	configureTextareaColors(&ta)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -314,7 +337,7 @@ func runTUI(cfg config, memoryName string) error {
 		textarea:   ta,
 		viewport:   viewport.New(70, 10),
 		spinner:    sp,
-		system:     "",
+		system:     sessionSystem(messages, cfg.SystemPrompt),
 	}
 	for _, msg := range messages {
 		if msg.Role == "user" {
@@ -323,7 +346,6 @@ func runTUI(cfg config, memoryName string) error {
 	}
 	// Detect the terminal background before Bubble Tea takes over terminal input.
 	m.resizeChat()
-	m.renderMarkdown("")
 	m.rebuildHistory()
 
 	// Leave mouse reporting off so terminals (including Windows Terminal/WSL)
@@ -426,6 +448,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.sessionsOpen {
 			return m.updateSessionMenu(msg)
+		}
+		if m.skillsOpen {
+			return m.updateSkillMenu(msg)
 		}
 		if m.doctorOpen {
 			if msg.String() == "esc" {
@@ -602,22 +627,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streaming == "" {
 			return m, nil
 		}
-		m.streamRendered = m.renderMarkdown(m.streaming)
+		m.streamRendered = m.renderStreamMarkdown(m.streaming)
 		m.streamDisplayFull = len(m.streaming) >= maxTUIDisplayBytes
 		m.refreshChat()
 		return m, nil
 
 	case tea.MouseMsg:
-		if m.mouseEnabled && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.mcpBusy {
+		if m.mouseEnabled && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.mcpBusy {
 			// Explicitly handle scroll wheel events for WSL/Touchpad compatibility.
 			switch tea.MouseMsg(msg).Button {
-			case tea.MouseButtonWheelUp:
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelLeft:
 				m.viewport.LineUp(3)
-			case tea.MouseButtonWheelDown:
-				m.viewport.LineDown(3)
-			case tea.MouseButtonWheelLeft:
-				m.viewport.LineUp(3)
-			case tea.MouseButtonWheelRight:
+			case tea.MouseButtonWheelDown, tea.MouseButtonWheelRight:
 				m.viewport.LineDown(3)
 			default:
 				m.viewport, _ = m.viewport.Update(msg)
@@ -662,7 +683,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.streaming = ""
 		if msg.text != "" {
-			m.messages = append(m.messages, message{Role: "assistant", Content: msg.text})
+			m.messages = append(m.messages, datedMessage(message{Role: "assistant", Content: msg.text}))
 		}
 		if m.memoryName != "" {
 			if err := saveMemory(m.memoryName, m.messages); err != nil {
@@ -719,6 +740,8 @@ func (m tuiModel) View() string {
 		body = m.sessionView()
 	} else if m.providersOpen {
 		body = m.providerView()
+	} else if m.skillsOpen {
+		body = m.skillView()
 	}
 
 	return m.renderChatLayout(body)
@@ -745,7 +768,7 @@ func (m tuiModel) renderChatLayout(body string) string {
 	if m.err != "" {
 		status = errStyle.Render(tuiStatusText(m.err, max(1, m.width-6)))
 	}
-	if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.doctorOpen {
+	if !m.loading && !m.mcpOpen && !m.providersOpen && !m.sessionsOpen && !m.skillsOpen && !m.doctorOpen {
 		if suggestions := m.slashSuggestions(); len(suggestions) > 0 {
 			status = hintStyle.Render(tuiStatusText("Commands: "+strings.Join(suggestions, "  ")+" · Tab to complete", max(1, m.width-6)))
 		}
@@ -777,24 +800,32 @@ func (m *tuiModel) rebuildHistory() {
 		}
 	}
 	if m.streaming != "" {
-		m.streamRendered = m.renderMarkdown(m.streaming)
+		m.streamRendered = m.renderStreamMarkdown(m.streaming)
 	}
 	m.refreshChat()
 }
 
 func (m *tuiModel) renderMarkdown(text string) string {
+	return m.renderMarkdownLimit(text, maxTUIMarkdownBytes)
+}
+
+func (m *tuiModel) renderStreamMarkdown(text string) string {
+	return m.renderMarkdownLimit(text, maxTUIStreamMarkdownBytes)
+}
+
+func (m *tuiModel) renderMarkdownLimit(text string, limit int) string {
 	text = tuiDisplayText(text)
-	if len(text) > maxTUIMarkdownBytes {
+	if text == "" {
+		return ""
+	}
+	if len(text) > limit {
 		return text
 	}
 	if m.markdown == nil {
-		style := "light"
-		if lipgloss.HasDarkBackground() {
-			style = "dark"
-		}
 		width := max(1, m.viewport.Width)
 		renderer, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(style),
+			glamour.WithStyles(terminalMarkdownStyle(lipgloss.HasDarkBackground())),
+			glamour.WithColorProfile(lipgloss.ColorProfile()),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
@@ -907,12 +938,37 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "/system":
+		m.textarea.SetValue("")
+		if err := saveSystemPrompt(arg); err != nil {
+			m.err = fmt.Sprintf("save system prompt: %v", err)
+			return m, nil
+		}
 		m.system = arg
-		m.err = ""
+		m.cfg.SystemPrompt = arg
+		// Update stored context immediately, including when clearing the prompt.
+		m.messages = appendMessage(m.messages, m.system)
+		if arg == "" && (len(m.messages) == 0 || m.messages[0].Role != "system") {
+			// An explicit empty prompt prevents another workspace default from
+			// reappearing when this session is resumed later.
+			m.messages = append([]message{{Role: "system", Content: ""}}, m.messages...)
+		}
+		m.err = "System prompt saved to .hanoi/system.md."
+		if arg == "" {
+			m.err = "System prompt cleared in this session and .hanoi/system.md."
+		}
+		if m.memoryName != "" {
+			if err := saveMemory(m.memoryName, m.messages); err != nil {
+				m.err = fmt.Sprintf("save session: %v", err)
+			}
+		}
+		m.rebuildHistory()
 		return m, nil
+	case "/skills":
+		m.textarea.SetValue("")
+		return m.handleSkillsCommand(arg)
 	case "/help":
 		// Keep the full help scrollable instead of expanding the status line.
-		help := "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · PgUp/PgDown · Ctrl+Home/End (top/bottom) · Ctrl+G (mouse mode) · Ctrl+T (trace) · ↑/↓ (input history)"
+		help := "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /skills [name] /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · PgUp/PgDown · Ctrl+Home/End (top/bottom) · Ctrl+G (mouse mode) · Ctrl+T (trace) · ↑/↓ (input history)"
 		m.err = ""
 		m.history = append(m.history, hintStyle.Render(help))
 		m.userScrolled = false
@@ -955,16 +1011,14 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func appendMessage(messages []message, system string, user message) []message {
-	if system == "" {
-		return append(messages, user)
-	}
-
+func appendMessage(messages []message, system string, user ...message) []message {
 	filtered := make([]message, 0, len(messages)+2)
 	inserted := false
+	keepEmpty := false
 	for _, msg := range messages {
 		if msg.Role == "system" {
-			if !inserted {
+			keepEmpty = true
+			if !inserted && system != "" {
 				filtered = append(filtered, message{Role: "system", Content: system})
 				inserted = true
 			}
@@ -972,10 +1026,15 @@ func appendMessage(messages []message, system string, user message) []message {
 		}
 		filtered = append(filtered, msg)
 	}
-	if !inserted {
+	if !inserted && system != "" {
 		filtered = append([]message{{Role: "system", Content: system}}, filtered...)
 	}
-	filtered = append(filtered, user)
+	if system == "" && keepEmpty {
+		filtered = append([]message{{Role: "system", Content: ""}}, filtered...)
+	}
+	for _, msg := range user {
+		filtered = append(filtered, datedMessage(msg))
+	}
 	return filtered
 }
 
@@ -1093,6 +1152,14 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (te
 			return "", err
 		}
 		out.WriteString(msg.Content)
+		if len(msg.ToolCalls) > 0 && msg.Content != "" {
+			// Keep text from different tool rounds apart so Markdown blocks such as
+			// tables do not attach to the last line of the previous round.
+			out.WriteString("\n\n")
+			if onChunk != nil {
+				onChunk("\n\n")
+			}
+		}
 		if len(msg.ToolCalls) == 0 {
 			if onChunk != nil {
 				onChunk("\n")
@@ -1110,6 +1177,29 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (te
 }
 
 func requestModel(cfg config, messages []message, stream bool, onChunk func(string)) (msg message, err error) {
+	// Some provider chat templates accept only one system message at index 0.
+	// Merge project and session instructions without changing persisted history.
+	input := make([]message, 0, len(messages)+1)
+	var instructions []string
+	if cfg.AgentInstructions != "" {
+		instructions = append(instructions, cfg.AgentInstructions)
+	}
+	for _, msg := range messages {
+		// Local archive metadata is not part of either provider API.
+		msg.Timestamp = nil
+		if msg.Role == "system" {
+			// Empty system messages are session persistence markers only.
+			if msg.Content != "" {
+				instructions = append(instructions, msg.Content)
+			}
+			continue
+		}
+		input = append(input, msg)
+	}
+	if len(instructions) > 0 {
+		input = append([]message{{Role: "system", Content: strings.Join(instructions, "\n\n")}}, input...)
+	}
+	messages = input
 	started := time.Now()
 	cfg.emitTrace(traceEvent{Type: "model.started"})
 	defer func() {
@@ -1279,20 +1369,11 @@ func loadMemory(name string) ([]message, error) {
 	if err := validateMemoryName(name); err != nil {
 		return nil, err
 	}
-	path := memoryPath(name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+	archive, err := readMemoryArchive(name)
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
-
-	var messages []message
-	if err := json.Unmarshal(data, &messages); err != nil {
-		return nil, err
-	}
-	return messages, nil
+	return archive.Messages, err
 }
 
 func saveMemory(name string, messages []message) error {
@@ -1304,7 +1385,16 @@ func saveMemory(name string, messages []message) error {
 		return err
 	}
 
-	data, err := json.MarshalIndent(messages, "", "  ")
+	archive, err := readMemoryArchive(name)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	now := time.Now()
+	if archive.CreatedAt.IsZero() {
+		archive.CreatedAt = now
+	}
+	archive.Version, archive.UpdatedAt, archive.Messages = 1, now, messages
+	data, err := json.MarshalIndent(archive, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -1348,6 +1438,7 @@ func availableTools(cfg config) []tool {
 			},
 		},
 	}
+	tools = append(tools, memoryTools()...)
 	return append(tools, cfg.MCP.Tools()...)
 }
 
@@ -1370,6 +1461,8 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 			cfg.Logger.Printf("tool name=%q args=%q started", call.Function.Name, call.Function.Arguments)
 		}
 		switch call.Function.Name {
+		case "memory_search", "memory_read":
+			output, err = callMemoryTool(cfg.context(), call.Function.Name, call.Function.Arguments)
 		case "bash":
 			ctx, cancel := context.WithTimeout(cfg.context(), 30*time.Second)
 			output, err = tools.RunBashContext(ctx, call.Function.Arguments)

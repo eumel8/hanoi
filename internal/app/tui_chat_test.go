@@ -220,3 +220,46 @@ func TestHelpIsScrollableAndFitsTerminal(t *testing.T) {
 		t.Fatal("help escaped terminal bounds")
 	}
 }
+
+func newScrollModel() tuiModel {
+	m := tuiModel{
+		width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10),
+		history: []string{strings.Repeat("chat line\n", 100)}, loading: true,
+	}
+	m.textarea.SetHeight(4)
+	m.resizeChat()
+	m.refreshChat()
+	return m
+}
+
+func TestScrollBackToBottomResumesFollowing(t *testing.T) {
+	var model tea.Model = newScrollModel()
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m := model.(tuiModel)
+	if !m.viewport.AtBottom() || m.userScrolled {
+		t.Fatalf("reaching the bottom must resume following, atBottom=%v userScrolled=%v", m.viewport.AtBottom(), m.userScrolled)
+	}
+	m.streaming = strings.Repeat("new\n", 30)
+	m.streamRendered = m.streaming
+	m.refreshChat()
+	if !m.viewport.AtBottom() {
+		t.Fatal("streamed lines must stay visible after scrolling back to the bottom")
+	}
+}
+
+func TestMouseWheelBackToBottomResumesFollowing(t *testing.T) {
+	m0 := newScrollModel()
+	m0.mouseEnabled = true
+	var model tea.Model = m0
+	model, _ = model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m := model.(tuiModel)
+	if !m.userScrolled {
+		t.Fatal("wheel up must pause following")
+	}
+	model, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m = model.(tuiModel)
+	if !m.viewport.AtBottom() || m.userScrolled {
+		t.Fatalf("wheel down to the bottom must resume following, atBottom=%v userScrolled=%v", m.viewport.AtBottom(), m.userScrolled)
+	}
+}

@@ -13,16 +13,19 @@ import (
 // config combines model settings with application-owned runtime services.
 type config struct {
 	appconfig.Config
-	Logger     *log.Logger
-	MCP        *mcpManager
-	OnStatus   func(string)
-	Trace      *trace.Recorder
-	OnTrace    func(traceEvent)
-	traceRun   *trace.Run
-	ConfigPath string
-	LogPath    string
-	TracePath  string
-	Context    context.Context
+	Logger                *log.Logger
+	MCP                   *mcpManager
+	OnStatus              func(string)
+	Trace                 *trace.Recorder
+	OnTrace               func(traceEvent)
+	traceRun              *trace.Run
+	ConfigPath            string
+	LogPath               string
+	TracePath             string
+	Context               context.Context
+	AgentInstructions     string
+	AgentInstructionsPath string
+	SystemPrompt          string
 }
 
 func (cfg config) context() context.Context {

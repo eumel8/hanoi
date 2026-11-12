@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,68 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestMCPStartupConnectsServersConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var unblock sync.Once
+	defer unblock.Do(func() { close(release) })
+	entries := make(map[string]mcpServerConfig)
+	for _, name := range []string{"first", "second"} {
+		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return newMCPTestServer() }, nil)
+		var first sync.Once
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			first.Do(func() {
+				started <- name
+				select {
+				case <-release:
+				case <-r.Context().Done():
+				}
+			})
+			handler.ServeHTTP(w, r)
+		}))
+		defer server.Close()
+		entries[name] = mcpServerConfig{Type: "remote", URL: server.URL}
+	}
+	path := filepath.Join(t.TempDir(), "hanoi.json")
+	data, err := json.Marshal(map[string]any{"mcp": map[string]any{"servers": entries}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan *mcpManager, 1)
+	errors := make(chan error, 1)
+	go func() {
+		manager, err := newMCPManager(path, nil)
+		result <- manager
+		errors <- err
+	}()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for range 2 {
+		select {
+		case <-started:
+		case <-timer.C:
+			unblock.Do(func() { close(release) })
+			manager := <-result
+			if manager != nil {
+				manager.Close()
+			}
+			t.Fatal("server startup is serialized: second connection did not start while first was blocked")
+		}
+	}
+	unblock.Do(func() { close(release) })
+	manager := <-result
+	if err := <-errors; err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(manager.Tools()) != 4 {
+		t.Fatalf("startup returned before complete tool discovery: %v", manager.rows())
+	}
+}
 
 func writeMCPTestConfig(t *testing.T, path string, entry mcpServerConfig) {
 	t.Helper()
@@ -185,8 +248,8 @@ func TestMCPChatIntegration(t *testing.T) {
 					w.WriteHeader(400)
 					return
 				}
-				if len(request.Tools) != 3 {
-					t.Errorf("expected bash + 2 MCP tools, got %d", len(request.Tools))
+				if len(request.Tools) != 5 {
+					t.Errorf("expected bash + 2 memory + 2 MCP tools, got %d", len(request.Tools))
 				}
 				var response message
 				if requests == 1 {

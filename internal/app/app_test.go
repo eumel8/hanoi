@@ -33,6 +33,18 @@ func TestToolFollowupWithEmptyContent(t *testing.T) {
 				return
 			}
 		}
+		if len(request.Messages) < 2 || request.Messages[0]["role"] != "system" || request.Messages[0]["content"] != "Project rules\n\nManual rules" {
+			t.Error("missing project or manual instructions in tool request")
+			w.WriteHeader(400)
+			return
+		}
+		request.Messages = request.Messages[1:]
+		for _, msg := range request.Messages {
+			if msg["role"] == "system" {
+				http.Error(w, "System message must be at the beginning.", 400)
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if requests == 1 {
 			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_test","type":"function","function":{"name":"bash","arguments":"{\"command\":\"true\"}"}}]}}]}`)
@@ -53,7 +65,7 @@ func TestToolFollowupWithEmptyContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	text, err := sendChat(config{Config: appconfig.Config{APIKey: "test-key", Model: "test", BaseURL: server.URL}}, []message{{Role: "user", Content: "run true"}}, false)
+	text, err := sendChat(config{Config: appconfig.Config{APIKey: "test-key", Model: "test", BaseURL: server.URL}, AgentInstructions: "Project rules"}, appendMessage(nil, "Manual rules", message{Role: "user", Content: "run true"}), false)
 	if err != nil || text != "done" || requests != 2 {
 		t.Fatalf("text=%q requests=%d err=%v", text, requests, err)
 	}
@@ -75,13 +87,20 @@ func TestAPILogging(t *testing.T) {
 				if r.Header.Get("Authorization") != "Bearer private-test-key" {
 					t.Error("missing authorization header")
 				}
+				var request chatRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if len(request.Messages) != 1 || request.Messages[0].Role != "user" {
+					t.Error("empty session system marker was sent to provider")
+				}
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
 			var output bytes.Buffer
 			cfg := config{Config: appconfig.Config{APIKey: "private-test-key", Model: "test", BaseURL: server.URL}, Logger: log.New(&output, "", 0)}
-			text, err := sendChat(cfg, []message{{Role: "user", Content: "test prompt"}}, tc.stream)
+			text, err := sendChat(cfg, []message{{Role: "system", Content: ""}, {Role: "user", Content: "test prompt"}}, tc.stream)
 			if tc.status == 400 {
 				if err == nil || !strings.Contains(err.Error(), "expected string content") {
 					t.Fatalf("expected API error, got %v", err)
@@ -124,6 +143,12 @@ func TestStreamingToolFollowup(t *testing.T) {
 				if !request.Stream || len(request.Tools) == 0 {
 					t.Error("follow-up must retain streaming and tool definitions")
 				}
+				if len(request.Messages) < 2 || request.Messages[0].Role != "system" || request.Messages[0].Content != "Project rules" {
+					t.Error("missing project instructions in streaming request")
+					w.WriteHeader(400)
+					return
+				}
+				request.Messages = request.Messages[1:]
 				if len(request.Messages) != 1+3*(requests-1) {
 					t.Errorf("unexpected message count: %d", len(request.Messages))
 					w.WriteHeader(400)
@@ -175,10 +200,10 @@ func TestStreamingToolFollowup(t *testing.T) {
 
 			var chunks strings.Builder
 			messages := []message{{Role: "user", Content: "run tools"}}
-			text, err := sendStreamingChat(config{Config: appconfig.Config{APIKey: "test", Model: "test", BaseURL: server.URL}}, messages, func(piece string) {
+			text, err := sendStreamingChat(config{Config: appconfig.Config{APIKey: "test", Model: "test", BaseURL: server.URL}, AgentInstructions: "Project rules"}, messages, func(piece string) {
 				chunks.WriteString(piece)
 			})
-			want := strings.Repeat("Checking.", rounds) + "hello"
+			want := strings.Repeat("Checking.\n\n", rounds) + "hello"
 			if err != nil || text != want || chunks.String() != want+"\n" || requests != rounds+1 {
 				t.Fatalf("text=%q chunks=%q requests=%d err=%v", text, chunks.String(), requests, err)
 			}

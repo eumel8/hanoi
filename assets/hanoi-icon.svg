@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Hanoi icon</title>
+  <desc id="desc">A mint and cyan Tower of Hanoi with three pegs and a terminal prompt on a midnight-blue rounded square.</desc>
+  <rect width="256" height="256" rx="56" fill="#101d2f"/>
+  <g fill="none" stroke="#34485e" stroke-width="8" stroke-linecap="round">
+    <path d="M46 190V135M128 190V60M210 190V135"/>
+  </g>
+  <rect x="104" y="76" width="48" height="19" rx="9.5" fill="#a7f3d0"/>
+  <rect x="91" y="104" width="74" height="19" rx="9.5" fill="#67e8d0"/>
+  <rect x="78" y="132" width="100" height="19" rx="9.5" fill="#36d7d4"/>
+  <rect x="65" y="160" width="126" height="19" rx="9.5" fill="#22b9d1"/>
+  <path d="M38 196H218" fill="none" stroke="#e7f2fa" stroke-width="8" stroke-linecap="round"/>
+  <g fill="none" stroke="#a7f3d0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m188 78 12 10-12 10m18 0h12"/>
+  </g>
+</svg>

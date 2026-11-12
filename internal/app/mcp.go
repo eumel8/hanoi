@@ -100,11 +100,19 @@ func (m *mcpManager) Reload() error {
 		m.servers[name] = &mcpServerState{config: entry, status: status}
 	}
 	m.mu.Unlock()
+	// Independent servers can initialize concurrently; wait before advertising
+	// tools so the first model request still sees the complete startup catalog.
+	var startup sync.WaitGroup
 	for _, name := range m.names() {
 		if !entries[name].Disabled {
-			_ = m.connect(name)
+			startup.Add(1)
+			go func(name string) {
+				defer startup.Done()
+				_ = m.connect(name)
+			}(name)
 		}
 	}
+	startup.Wait()
 	return nil
 }
 
