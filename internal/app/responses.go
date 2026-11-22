@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -79,6 +80,9 @@ func requestResponse(cfg config, messages []message, tools []tool, stream bool, 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return message{}, fmt.Errorf("responses API error (%s)", resp.Status)
+		}
+		if isContextLimitError(resp.StatusCode, body) {
+			return message{}, &contextLimitError{cause: fmt.Errorf("responses API error (%s): %s", resp.Status, body)}
 		}
 		return message{}, fmt.Errorf("responses API error (%s): %s", resp.Status, body)
 	}
@@ -166,8 +170,14 @@ func readResponseStream(body io.Reader, onChunk func(string)) (responseResult, e
 		case "response.completed":
 			result, completed = event.Response, true
 		case "response.failed", "response.incomplete":
+			if isContextLimitError(http.StatusBadRequest, []byte(payload)) {
+				return &contextLimitError{cause: fmt.Errorf("responses stream: %s", event.Type)}
+			}
 			return fmt.Errorf("responses stream: %s", event.Type)
 		case "error":
+			if isContextLimitError(http.StatusBadRequest, []byte(payload)) {
+				return &contextLimitError{cause: fmt.Errorf("responses stream error: %s", event.Message)}
+			}
 			return fmt.Errorf("responses stream error: %s", event.Message)
 		}
 		return nil

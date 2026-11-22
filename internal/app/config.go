@@ -19,6 +19,7 @@ type config struct {
 	OnTask                func(taskUpdate)
 	OnUsage               func(usageEvent)
 	Subagent              bool
+	DisableTools          bool
 	Trace                 *trace.Recorder
 	OnTrace               func(traceEvent)
 	traceRun              *trace.Run

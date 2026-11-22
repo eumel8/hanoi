@@ -129,6 +129,14 @@ the provider omitted usage or the model's context window/pricing is unknown;
 cost is shown only when all recorded usage has configured pricing. The context
 count is the previous request's reported input, not a prediction for the next.
 
+If the provider explicitly rejects a model request for exceeding its context
+limit, Hanoi asks the model to summarize older, complete conversation turns
+without tools, then retries the request (at most three compactions). The latest
+user request and any pending tool call/results stay together; the saved session
+history is not rewritten. If even the current request or the summary cannot fit,
+Hanoi reports the error. Other API errors do not trigger compaction. This also
+applies to subagents, within their five-minute task timeout.
+
 OpenAI `gpt-6-astra` and `gpt-6.1-sol` require the Responses API for function
 calling. Hanoi automatically uses `/v1/responses` for these models on
 `api.openai.com`, including when `OPENAI_BASE_URL` is the usual Chat Completions

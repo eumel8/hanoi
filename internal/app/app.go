@@ -1156,27 +1156,23 @@ func sendChat(cfg config, messages []message, stream bool) (text string, err err
 		})
 	}
 
-	msg, err := requestModel(cfg, messages, false, nil)
-	if err != nil {
-		return "", err
+	for {
+		var msg message
+		msg, messages, err = requestWithCompaction(cfg, messages, false, nil)
+		if err != nil {
+			return "", err
+		}
+		if len(msg.ToolCalls) == 0 {
+			return msg.Content, nil
+		}
+		var toolMessages []message
+		toolMessages, err = executeToolCalls(msg.ToolCalls, cfg)
+		if err != nil {
+			return "", err
+		}
+		messages = append(messages, msg)
+		messages = append(messages, toolMessages...)
 	}
-	if len(msg.ToolCalls) == 0 {
-		return msg.Content, nil
-	}
-
-	toolMessages, err := executeToolCalls(msg.ToolCalls, cfg)
-	if err != nil {
-		return "", err
-	}
-
-	followupMessages := append(append([]message{}, messages...), message{
-		Role:           msg.Role,
-		Content:        msg.Content,
-		ToolCalls:      msg.ToolCalls,
-		ResponseOutput: msg.ResponseOutput,
-	})
-	followupMessages = append(followupMessages, toolMessages...)
-	return sendChat(cfg, followupMessages, false)
 }
 
 func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (text string, err error) {
@@ -1185,10 +1181,11 @@ func sendStreamingChat(cfg config, messages []message, onChunk func(string)) (te
 	messages = append([]message{}, messages...)
 	var out strings.Builder
 	for {
-		msg, err := requestModel(cfg, messages, true, onChunk)
+		msg, nextMessages, err := requestWithCompaction(cfg, messages, true, onChunk)
 		if err != nil {
 			return "", err
 		}
+		messages = nextMessages
 		out.WriteString(msg.Content)
 		if len(msg.ToolCalls) > 0 && msg.Content != "" {
 			// Keep text from different tool rounds apart so Markdown blocks such as
@@ -1282,6 +1279,9 @@ func requestModelAttempt(cfg config, request chatRequest, onChunk func(string)) 
 			}
 			request.ReasoningEffort = "none"
 			return requestModelAttempt(cfg, request, onChunk)
+		}
+		if isContextLimitError(resp.StatusCode, body) {
+			return msg, &contextLimitError{cause: fmt.Errorf("api error (%s): %s", resp.Status, body)}
 		}
 		return msg, fmt.Errorf("api error (%s): %s", resp.Status, body)
 	}
@@ -1485,6 +1485,9 @@ func memoryPath(name string) string {
 }
 
 func availableTools(cfg config) []tool {
+	if cfg.DisableTools {
+		return nil
+	}
 	tools := []tool{
 		{
 			Type: "function",
