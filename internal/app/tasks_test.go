@@ -14,6 +14,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	appconfig "hanoi/internal/config"
 )
 
@@ -96,6 +98,7 @@ func TestParallelSubagentsAndParentFollowup(t *testing.T) {
 	for _, update := range updates {
 		m.tasks[update.ID] = update
 	}
+	m.toggleTasks()
 	if view := m.View(); !strings.Contains(view, "research 1: done") || !strings.Contains(view, "research 2: done") {
 		t.Fatalf("task status missing in TUI: %s", view)
 	}
@@ -185,5 +188,93 @@ func TestSubagentCancelStopsRequest(t *testing.T) {
 	defer mu.Unlock()
 	if len(updates) != 2 || updates[1].Status != "cancelled" {
 		t.Fatalf("missing cancelled task status: %+v", updates)
+	}
+}
+
+func TestSubtaskFailureShowsReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"provider unavailable"}}`, http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	var updates []taskUpdate
+	cfg := config{Config: appconfig.Config{Model: "demo", BaseURL: server.URL}, OnTask: func(update taskUpdate) { updates = append(updates, update) }}
+	call := toolCall{ID: "failed-task", Type: "function"}
+	call.Function.Name, call.Function.Arguments = "task", `{"description":"research","prompt":"check"}`
+	_, err := runTask(cfg, call)
+	if err == nil || len(updates) != 2 || updates[1].Status != "failed" || !strings.Contains(updates[1].Reason, "503") {
+		t.Fatalf("expected failed status with provider cause: err=%v updates=%+v", err, updates)
+	}
+	m := tuiModel{width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10), tasks: map[string]taskUpdate{call.ID: updates[1]}}
+	if !strings.Contains(m.taskDetails(), "503") {
+		t.Fatal("task details omit failure cause")
+	}
+}
+
+func TestSubtaskCancellationShowsReason(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var updates []taskUpdate
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	defer server.Close()
+	cfg := config{Config: appconfig.Config{Model: "demo", BaseURL: server.URL}, Context: ctx, OnTask: func(update taskUpdate) { updates = append(updates, update) }}
+	call := toolCall{ID: "timeout-task", Type: "function"}
+	call.Function.Name, call.Function.Arguments = "task", `{"description":"research","prompt":"check"}`
+	_, _ = runTask(cfg, call)
+	if len(updates) != 2 || updates[1].Status != "cancelled" || updates[1].Reason == "" {
+		t.Fatalf("expected cancellation cause: %+v", updates)
+	}
+}
+
+func TestTaskSummaryAndDetailsToggle(t *testing.T) {
+	m := tuiModel{
+		width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10),
+		history: []string{strings.Repeat("chat line\n", 80)}, loading: true, tasks: make(map[string]taskUpdate),
+	}
+	m.textarea.SetHeight(4)
+	for i := 0; i < 10; i++ {
+		m.tasks[fmt.Sprintf("task-%02d", i)] = taskUpdate{Description: fmt.Sprintf("research %d", i), Status: "failed", Reason: "context deadline exceeded"}
+	}
+	m.resizeChat()
+	m.refreshChat()
+	if got := lipgloss.Height(m.View()); got > m.height {
+		t.Fatalf("collapsed tasks exceed terminal height: %d > %d", got, m.height)
+	}
+	if got := strings.Count(strings.Join(m.chatHeader(), "\n"), "research "); got != 0 {
+		t.Fatalf("collapsed summary unexpectedly contains task details: %d", got)
+	}
+	if m.viewport.Height < 8 {
+		t.Fatalf("collapsed tasks leave too little chat space: %d", m.viewport.Height)
+	}
+	m.viewport.GotoBottom()
+	offset := m.viewport.YOffset
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !m.tasksOpen || !strings.Contains(m.View(), "context deadline exceeded") || lipgloss.Height(m.View()) > m.height {
+		t.Fatal("Ctrl+S must open scrollable task details within terminal height")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.viewport.YOffset == 0 {
+		t.Fatal("task details must be scrollable")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.tasksOpen || m.viewport.YOffset != offset {
+		t.Fatal("Esc must restore chat and scroll position")
+	}
+}
+
+func TestTaskDetailsUpdateWhileLoading(t *testing.T) {
+	m := tuiModel{width: 80, height: 30, textarea: textarea.New(), viewport: viewport.New(60, 10), loading: true}
+	m.textarea.SetHeight(4)
+	m.resizeChat()
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = updateModel(m, taskUpdate{ID: "one", Description: "research", Status: "failed", Reason: "context deadline exceeded"})
+	if !strings.Contains(m.View(), "context deadline exceeded") {
+		t.Fatal("task detail view did not refresh during an active response")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.tasksOpen || !strings.Contains(m.View(), "tasks: 1") {
+		t.Fatal("Ctrl+S must close details while loading without losing task count")
 	}
 }

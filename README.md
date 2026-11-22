@@ -119,6 +119,9 @@ Task calls returned in the same model response run concurrently (up to four),
 and the header shows each task's status. Subagents have separate conversations,
 share the working directory and cannot start further subagents. Stopping a turn
 also cancels its subagents.
+Task counts occupy one line in the TUI; press `Ctrl+S` to open the scrollable
+task list (or `Esc` to close it). Failed tasks show the underlying error there,
+including an explicit message when a subagent reaches its five-minute limit.
 
 The TUI shows the last main-agent input token count against the configured
 `contextWindow`, plus accumulated input/output tokens including subagents.

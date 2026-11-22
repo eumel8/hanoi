@@ -159,6 +159,7 @@ type tuiModel struct {
 	doctorBusy       bool
 	doctorText       string
 	tasks            map[string]taskUpdate
+	tasksOpen        bool
 	usage            sessionUsage
 
 	providerAuthCancel context.CancelFunc
@@ -413,7 +414,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tasks = make(map[string]taskUpdate)
 		}
 		m.tasks[msg.ID] = msg
-		m.resizeChat()
+		if m.tasksOpen {
+			m.refreshChat()
+		}
 		return m, nil
 	case usageEvent:
 		m.usage.add(msg, m.cfg)
@@ -489,8 +492,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.String() == "ctrl+s" || (m.tasksOpen && msg.String() == "esc") {
+			m.toggleTasks()
+			return m, nil
+		}
 		if msg.String() == "ctrl+t" || (m.traceOpen && msg.String() == "esc") {
 			m.toggleTrace()
+			return m, nil
+		}
+		if m.tasksOpen {
+			if m.scrollChat(msg) {
+				m.userScrolled = !m.viewport.AtBottom()
+			}
 			return m, nil
 		}
 		if msg.String() == "ctrl+g" {
@@ -550,6 +563,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.SetValue("")
 			m.loading = true
 			m.tasks = nil
+			m.tasksOpen = false
 			m.cancelling = false
 			m.lastEscape = time.Time{}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -906,6 +920,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 	case "/clear":
 		m.messages = nil
 		m.tasks = nil
+		m.tasksOpen = false
 		m.usage = sessionUsage{}
 		m.streaming = ""
 		m.rebuildHistory()
@@ -996,7 +1011,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m.handleSkillsCommand(arg)
 	case "/help":
 		// Keep the full help scrollable instead of expanding the status line.
-		help := "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /skills [name] /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · PgUp/PgDown · Ctrl+Home/End (top/bottom) · Ctrl+G (mouse mode) · Ctrl+T (trace) · ↑/↓ (input history)"
+		help := "Commands: /new [name] /sessions [name] /clear /save /model [provider/model] /providers /models /connect github-copilot /logout github-copilot /system <text> /skills [name] /mcps /trace /doctor [provider] /exit\nEsc Esc: stop model/tools (within 1s)\nScroll: Ctrl+↑↓ (3 lines) · PgUp/PgDown · Ctrl+Home/End (top/bottom) · Ctrl+G (mouse mode) · Ctrl+T (trace) · Ctrl+S (tasks) · ↑/↓ (input history)"
 		m.err = ""
 		m.history = append(m.history, hintStyle.Render(help))
 		m.userScrolled = false

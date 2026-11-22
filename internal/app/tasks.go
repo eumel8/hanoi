@@ -10,7 +10,7 @@ import (
 )
 
 type taskUpdate struct {
-	ID, Description, Status string
+	ID, Description, Status, Reason string
 }
 
 func taskTool() tool {
@@ -65,14 +65,19 @@ func runTask(cfg config, call toolCall) (string, error) {
 		}
 	}
 	status := "done"
+	reason := ""
 	if err != nil {
 		status = "failed"
+		reason = err.Error()
 	}
 	if cfg.context().Err() != nil {
 		status = "cancelled"
+		reason = cfg.context().Err().Error()
+	} else if ctx.Err() == context.DeadlineExceeded {
+		status, reason = "failed", "subagent timed out after 5 minutes"
 	}
 	if cfg.OnTask != nil {
-		cfg.OnTask(taskUpdate{ID: call.ID, Description: args.Description, Status: status})
+		cfg.OnTask(taskUpdate{ID: call.ID, Description: args.Description, Status: status, Reason: reason})
 	}
 	return text, err
 }
@@ -103,7 +108,7 @@ func executeParallelTasks(calls []toolCall, cfg config) ([]message, error) {
 						Description string `json:"description"`
 					}
 					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					cfg.OnTask(taskUpdate{ID: call.ID, Description: args.Description, Status: "cancelled"})
+					cfg.OnTask(taskUpdate{ID: call.ID, Description: args.Description, Status: "cancelled", Reason: cfg.context().Err().Error()})
 				}
 				return
 			}
