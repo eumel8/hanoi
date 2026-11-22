@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -105,8 +107,12 @@ func clipArgs(s string, limit int) string {
 func (m tuiModel) chatHeader() []string {
 	header := []string{
 		headStyle.Render("hanoi TUI"),
-		hintStyle.Render("Enter send · Esc Esc stop · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · /help"),
+		hintStyle.Render("Enter send · Esc Esc stop · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · Ctrl+S tasks · /help"),
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
+	}
+	header = append(header, hintStyle.Render(m.usage.summary(m.cfg)))
+	if len(m.tasks) > 0 {
+		header = append(header, hintStyle.Render(tuiStatusText(m.taskSummary(), max(1, m.width-appStyle.GetHorizontalFrameSize()))))
 	}
 	if m.mouseEnabled {
 		header[0] += hintStyle.Render(" · mouse scroll on (Ctrl+G: select text)")
@@ -128,12 +134,64 @@ func (m tuiModel) chatHeader() []string {
 	if m.doctorOpen {
 		header = append(header, headStyle.Render("Hanoi Doctor · Esc returns to chat"))
 	}
+	if m.tasksOpen {
+		header = append(header, headStyle.Render("Subtasks · Ctrl+S / Esc returns to chat"))
+	}
 	// Header text must not expand the layout beyond the terminal width. Its
 	// wrapped height is also used by resizeChat.
 	for i := range header {
 		header[i] = ansi.Hardwrap(header[i], max(1, m.width-appStyle.GetHorizontalFrameSize()), true)
 	}
 	return header
+}
+
+func (m tuiModel) taskSummary() string {
+	counts := map[string]int{}
+	for _, task := range m.tasks {
+		counts[task.Status]++
+	}
+	return fmt.Sprintf("tasks: %d · Ctrl+S details · %d running · %d queued · %d done · %d failed · %d cancelled",
+		len(m.tasks), counts["running"], counts["queued"], counts["done"], counts["failed"], counts["cancelled"])
+}
+
+func (m tuiModel) taskDetails() string {
+	if len(m.tasks) == 0 {
+		return "No subtasks in this turn."
+	}
+	ids := make([]string, 0, len(m.tasks))
+	for id := range m.tasks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var details []string
+	for _, id := range ids {
+		task := m.tasks[id]
+		line := "task " + task.Description + ": " + task.Status
+		if task.Reason != "" {
+			line += " · " + task.Reason
+		}
+		details = append(details, tuiDisplayText(line))
+	}
+	return strings.Join(details, "\n\n")
+}
+
+func (m *tuiModel) toggleTasks() {
+	if !m.tasksOpen {
+		if !m.traceOpen {
+			m.chatOffset = m.viewport.YOffset
+		}
+		m.traceOpen = false
+	}
+	m.tasksOpen = !m.tasksOpen
+	m.userScrolled = false
+	m.resizeChat()
+	m.refreshChat()
+	if m.tasksOpen {
+		m.viewport.GotoTop()
+	} else {
+		m.viewport.SetYOffset(m.chatOffset)
+		m.userScrolled = !m.viewport.AtBottom()
+	}
 }
 
 func (m *tuiModel) resizeChat() {
@@ -152,6 +210,8 @@ func (m *tuiModel) refreshChat() {
 		body = doctorReportText(m.doctorText)
 	} else if m.traceOpen {
 		body = renderTrace(m.traceEvents)
+	} else if m.tasksOpen {
+		body = m.taskDetails()
 	} else if m.streaming != "" {
 		body += "\n\n" + botStyle.Render("assistant") + "\n" + m.streamRendered
 	}

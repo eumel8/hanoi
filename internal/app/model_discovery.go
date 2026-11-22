@@ -107,6 +107,9 @@ func (cfg config) withDiscoveredModels(models map[string]appconfig.Model) config
 	provider := providers["github-copilot"]
 	merged := make(map[string]appconfig.Model, len(models))
 	for id, model := range models {
+		if local, ok := provider.Models[id]; ok {
+			model.ContextWindow, model.Cost = local.ContextWindow, local.Cost
+		}
 		merged[id] = model
 	}
 	for alias, local := range provider.Models {
@@ -116,6 +119,7 @@ func (cfg config) withDiscoveredModels(models map[string]appconfig.Model) config
 		}
 		if remote, ok := models[id]; ok {
 			remote.ID = local.ID
+			remote.ContextWindow, remote.Cost = local.ContextWindow, local.Cost
 			if local.Name != "" {
 				remote.Name = local.Name
 			}

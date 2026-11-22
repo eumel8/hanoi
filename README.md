@@ -16,6 +16,8 @@ Basic AI harness in Go.
 - GitHub Copilot provider with OAuth2 device login in the CLI and TUI
 - works as a simple OpenAI-compatible harness
 - includes OpenAI-style tool calling with a local `bash` tool
+- parallel `task` subagents with live task status in the TUI
+- context-window, session-token and configured-price cost display in the TUI
 - optional API logging with `-log <file>`
 - live Hanoi Trace timeline in the TUI and optional structured JSONL export with `-trace <file>`
 - MCP tools from local and remote servers, with OpenCode-compatible config and `/mcps` management
@@ -111,6 +113,32 @@ OPENAI_BASE_URL=https://api.openai.com/v1/chat/completions
 ```
 
 Environment variables still work too.
+
+In the TUI, the `task` tool lets the model delegate independent investigations.
+Task calls returned in the same model response run concurrently (up to four),
+and the header shows each task's status. Subagents have separate conversations,
+share the working directory and cannot start further subagents. Stopping a turn
+also cancels its subagents.
+Task counts occupy one line in the TUI; press `Ctrl+S` to open the scrollable
+task list (or `Esc` to close it). Failed tasks show the underlying error there,
+including an explicit message when a subagent reaches its five-minute limit.
+
+The TUI shows the last main-agent input token count against the configured
+`contextWindow`, plus accumulated input/output tokens including subagents.
+For configured models, set `contextWindow` and `cost.input`/`cost.output` in
+`hanoi.json` as shown in `hanoi.json.example`; costs are USD per million tokens.
+Usage comes from provider responses and is saved with the session. A `?` means
+the provider omitted usage or the model's context window/pricing is unknown;
+cost is shown only when all recorded usage has configured pricing. The context
+count is the previous request's reported input, not a prediction for the next.
+
+If the provider explicitly rejects a model request for exceeding its context
+limit, Hanoi asks the model to summarize older, complete conversation turns
+without tools, then retries the request (at most three compactions). The latest
+user request and any pending tool call/results stay together; the saved session
+history is not rewritten. If even the current request or the summary cannot fit,
+Hanoi reports the error. Other API errors do not trigger compaction. This also
+applies to subagents, within their five-minute task timeout.
 
 OpenAI `gpt-6-astra` and `gpt-6.1-sol` require the Responses API for function
 calling. Hanoi automatically uses `/v1/responses` for these models on

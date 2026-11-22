@@ -16,6 +16,10 @@ type config struct {
 	Logger                *log.Logger
 	MCP                   *mcpManager
 	OnStatus              func(string)
+	OnTask                func(taskUpdate)
+	OnUsage               func(usageEvent)
+	Subagent              bool
+	DisableTools          bool
 	Trace                 *trace.Recorder
 	OnTrace               func(traceEvent)
 	traceRun              *trace.Run

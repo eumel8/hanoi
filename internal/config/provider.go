@@ -14,9 +14,14 @@ import (
 )
 
 type Model struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Endpoint string `json:"-"` // Runtime endpoint advertised by model discovery.
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Endpoint      string `json:"-"`             // Runtime endpoint advertised by model discovery.
+	ContextWindow int    `json:"contextWindow"` // Maximum context tokens, if known.
+	Cost          struct {
+		Input  float64 `json:"input"` // USD per million tokens.
+		Output float64 `json:"output"`
+	} `json:"cost"`
 }
 
 var ErrMissingAPIKey = errors.New("OPENAI_API_KEY is not set")
@@ -250,6 +255,12 @@ func (cfg Config) ModelReference() string {
 		return cfg.Provider + "/" + cfg.ModelKey
 	}
 	return cfg.Model
+}
+
+// SelectedModel returns metadata for the active model; legacy env-only models
+// have no catalog metadata.
+func (cfg Config) SelectedModel() Model {
+	return cfg.Providers[cfg.Provider].Models[cfg.ModelKey]
 }
 
 // ModelChoices returns configured provider/model references in sorted order.

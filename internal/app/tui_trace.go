@@ -10,7 +10,10 @@ import (
 
 func (m *tuiModel) toggleTrace() {
 	if !m.traceOpen {
-		m.chatOffset = m.viewport.YOffset
+		if !m.tasksOpen {
+			m.chatOffset = m.viewport.YOffset
+		}
+		m.tasksOpen = false
 	}
 	m.traceOpen = !m.traceOpen
 	m.userScrolled = false
