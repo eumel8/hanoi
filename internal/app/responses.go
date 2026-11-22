@@ -21,6 +21,7 @@ func useResponses(cfg config) bool {
 }
 
 type responseResult struct {
+	Usage  tokenUsage        `json:"usage"`
 	Status string            `json:"status"`
 	Output []json.RawMessage `json:"output"`
 	Error  *struct {
@@ -96,6 +97,7 @@ func requestResponse(cfg config, messages []message, tools []tool, stream bool, 
 	if result.Status != "completed" {
 		return message{}, fmt.Errorf("responses API did not complete (status=%q)", result.Status)
 	}
+	cfg.recordUsage(result.Usage)
 	msg := message{Role: "assistant", ResponseOutput: result.Output}
 	for _, raw := range result.Output {
 		var item struct {

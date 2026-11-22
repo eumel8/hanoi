@@ -15,10 +15,11 @@ import (
 
 // Session JSON is the source of truth. No separate cache can retain cleared data.
 type memoryArchive struct {
-	Version   int       `json:"version"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Messages  []message `json:"messages"`
+	Version   int          `json:"version"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Messages  []message    `json:"messages"`
+	Usage     sessionUsage `json:"usage,omitempty"`
 }
 
 func datedMessage(msg message) message {

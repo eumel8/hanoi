@@ -96,7 +96,7 @@ func (m *tuiModel) preserveSession() error {
 		return fmt.Errorf("Stop the current response before switching sessions.")
 	}
 	if m.memoryName != "" {
-		return saveMemory(m.memoryName, m.messages)
+		return saveMemoryWithUsage(m.memoryName, m.messages, m.usage)
 	}
 	if len(m.messages) == 0 {
 		return nil
@@ -105,7 +105,7 @@ func (m *tuiModel) preserveSession() error {
 	if err != nil {
 		return err
 	}
-	if err := saveMemory(name, m.messages); err != nil {
+	if err := saveMemoryWithUsage(name, m.messages, m.usage); err != nil {
 		return err
 	}
 	m.memoryName = name
@@ -165,6 +165,8 @@ func (m *tuiModel) switchSession(name string) error {
 
 func (m *tuiModel) activateSession(name string, messages []message) {
 	m.memoryName, m.messages, m.autoSave = name, messages, true
+	m.tasks = nil
+	m.usage = loadSessionUsage(name)
 	m.pendingMessage = nil
 	m.system, m.streaming, m.streamRendered, m.err = sessionSystem(messages, m.cfg.SystemPrompt), "", "", ""
 	m.sessionsOpen, m.traceOpen, m.doctorOpen = false, false, false

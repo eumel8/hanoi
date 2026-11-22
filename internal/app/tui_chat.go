@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -107,6 +108,18 @@ func (m tuiModel) chatHeader() []string {
 		headStyle.Render("hanoi TUI"),
 		hintStyle.Render("Enter send · Esc Esc stop · ↑/↓ history · Ctrl+↑↓ scroll · Ctrl+T trace · /help"),
 		hintStyle.Render("model: " + m.cfg.ModelReference()),
+	}
+	header = append(header, hintStyle.Render(m.usage.summary(m.cfg)))
+	if len(m.tasks) > 0 {
+		ids := make([]string, 0, len(m.tasks))
+		for id := range m.tasks {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			task := m.tasks[id]
+			header = append(header, hintStyle.Render(tuiStatusText("task "+task.Description+": "+task.Status, max(1, m.width-6))))
+		}
 	}
 	if m.mouseEnabled {
 		header[0] += hintStyle.Render(" · mouse scroll on (Ctrl+G: select text)")

@@ -41,11 +41,14 @@ type message struct {
 }
 
 type chatRequest struct {
-	Model           string    `json:"model"`
-	Messages        []message `json:"messages"`
-	Tools           []tool    `json:"tools,omitempty"`
-	Stream          bool      `json:"stream,omitempty"`
-	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	Model         string    `json:"model"`
+	Messages      []message `json:"messages"`
+	Tools         []tool    `json:"tools,omitempty"`
+	Stream        bool      `json:"stream,omitempty"`
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type tool struct {
@@ -69,6 +72,7 @@ type toolCall struct {
 }
 
 type chatResponse struct {
+	Usage   tokenUsage `json:"usage"`
 	Choices []struct {
 		Message struct {
 			Role      string     `json:"role"`
@@ -79,6 +83,7 @@ type chatResponse struct {
 }
 
 type streamResponse struct {
+	Usage   tokenUsage `json:"usage"`
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
@@ -153,6 +158,8 @@ type tuiModel struct {
 	doctorOpen       bool
 	doctorBusy       bool
 	doctorText       string
+	tasks            map[string]taskUpdate
+	usage            sessionUsage
 
 	providerAuthCancel context.CancelFunc
 	providerAuthInfo   string
@@ -335,6 +342,7 @@ func runTUI(cfg config, memoryName string) error {
 		cfg:        cfg,
 		memoryName: memoryName,
 		autoSave:   true,
+		usage:      loadSessionUsage(memoryName),
 		messages:   messages,
 		textarea:   ta,
 		viewport:   viewport.New(70, 10),
@@ -399,6 +407,21 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeChat()
 		m.markdown = nil
 		m.rebuildHistory()
+		return m, nil
+	case taskUpdate:
+		if m.tasks == nil {
+			m.tasks = make(map[string]taskUpdate)
+		}
+		m.tasks[msg.ID] = msg
+		m.resizeChat()
+		return m, nil
+	case usageEvent:
+		m.usage.add(msg, m.cfg)
+		if m.memoryName != "" {
+			if err := saveMemoryWithUsage(m.memoryName, m.messages, m.usage); err != nil {
+				m.err = fmt.Sprintf("save session usage: %v", err)
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -518,7 +541,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.pendingMessage = appendMessage(m.messages, m.system, message{Role: "user", Content: prompt})
 			if m.memoryName != "" {
-				if err := saveMemory(m.memoryName, m.pendingMessage); err != nil {
+				if err := saveMemoryWithUsage(m.memoryName, m.pendingMessage, m.usage); err != nil {
 					m.err = fmt.Sprintf("save session: %v", err)
 					return m, nil
 				}
@@ -526,6 +549,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append([]message{}, m.pendingMessage...)
 			m.textarea.SetValue("")
 			m.loading = true
+			m.tasks = nil
 			m.cancelling = false
 			m.lastEscape = time.Time{}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -675,7 +699,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streaming = ""
 			m.messages = m.messages[:max(0, len(m.messages)-1)]
 			if m.memoryName != "" {
-				if err := saveMemory(m.memoryName, m.messages); err != nil {
+				if err := saveMemoryWithUsage(m.memoryName, m.messages, m.usage); err != nil {
 					m.err += fmt.Sprintf("; save session: %v", err)
 				}
 			}
@@ -688,7 +712,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, datedMessage(message{Role: "assistant", Content: msg.text}))
 		}
 		if m.memoryName != "" {
-			if err := saveMemory(m.memoryName, m.messages); err != nil {
+			if err := saveMemoryWithUsage(m.memoryName, m.messages, m.usage); err != nil {
 				m.err = fmt.Sprintf("save memory: %v", err)
 			}
 		}
@@ -881,11 +905,13 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "/clear":
 		m.messages = nil
+		m.tasks = nil
+		m.usage = sessionUsage{}
 		m.streaming = ""
 		m.rebuildHistory()
 		m.err = ""
 		if m.memoryName != "" {
-			if err := saveMemory(m.memoryName, m.messages); err != nil {
+			if err := saveMemoryWithUsage(m.memoryName, m.messages, m.usage); err != nil {
 				m.err = fmt.Sprintf("save memory: %v", err)
 			}
 		}
@@ -899,7 +925,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			}
 			m.memoryName = name
 		}
-		if err := saveMemory(m.memoryName, m.messages); err != nil {
+		if err := saveMemoryWithUsage(m.memoryName, m.messages, m.usage); err != nil {
 			m.err = fmt.Sprintf("save memory: %v", err)
 			return m, nil
 		}
@@ -959,7 +985,7 @@ func (m tuiModel) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 			m.err = "System prompt cleared in this session and .hanoi/system.md."
 		}
 		if m.memoryName != "" {
-			if err := saveMemory(m.memoryName, m.messages); err != nil {
+			if err := saveMemoryWithUsage(m.memoryName, m.messages, m.usage); err != nil {
 				m.err = fmt.Sprintf("save session: %v", err)
 			}
 		}
@@ -1050,6 +1076,16 @@ func streamChatCmd(cfg config, messages []message) tea.Cmd {
 		cfg.OnStatus = func(status string) {
 			if streamProgram != nil {
 				streamProgram.Send(chatStatusMsg(status))
+			}
+		}
+		cfg.OnTask = func(update taskUpdate) {
+			if streamProgram != nil {
+				streamProgram.Send(update)
+			}
+		}
+		cfg.OnUsage = func(usage usageEvent) {
+			if streamProgram != nil {
+				streamProgram.Send(usage)
 			}
 		}
 		text, err := sendStreamingChat(cfg, messages, func(piece string) {
@@ -1214,7 +1250,13 @@ func requestModel(cfg config, messages []message, stream bool, onChunk func(stri
 	if useResponses(cfg) {
 		return requestResponse(cfg, messages, availableTools(cfg), stream, onChunk)
 	}
-	return requestModelAttempt(cfg, chatRequest{Model: cfg.Model, Messages: messages, Tools: availableTools(cfg), Stream: stream}, onChunk)
+	request := chatRequest{Model: cfg.Model, Messages: messages, Tools: availableTools(cfg), Stream: stream}
+	if stream && cfg.Provider != "github-copilot" {
+		request.StreamOptions = &struct {
+			IncludeUsage bool `json:"include_usage"`
+		}{true}
+	}
+	return requestModelAttempt(cfg, request, onChunk)
 }
 
 func requestModelAttempt(cfg config, request chatRequest, onChunk func(string)) (msg message, err error) {
@@ -1244,7 +1286,7 @@ func requestModelAttempt(cfg config, request chatRequest, onChunk func(string)) 
 		return msg, fmt.Errorf("api error (%s): %s", resp.Status, body)
 	}
 	if request.Stream {
-		return handleStream(resp.Body, onChunk)
+		return handleStreamWithUsage(resp.Body, onChunk, cfg.recordUsage)
 	}
 	var result chatResponse
 	body, err := io.ReadAll(resp.Body)
@@ -1257,6 +1299,7 @@ func requestModelAttempt(cfg config, request chatRequest, onChunk func(string)) 
 	if len(result.Choices) == 0 {
 		return msg, fmt.Errorf("no choices returned")
 	}
+	cfg.recordUsage(result.Usage)
 	choice := result.Choices[0].Message
 	return message{Role: choice.Role, Content: choice.Content, ToolCalls: choice.ToolCalls}, nil
 }
@@ -1281,9 +1324,14 @@ func requiresToolReasoningNone(status int, body []byte) bool {
 }
 
 func handleStream(body io.Reader, onChunk func(string)) (message, error) {
+	return handleStreamWithUsage(body, onChunk, nil)
+}
+
+func handleStreamWithUsage(body io.Reader, onChunk func(string), onUsage func(tokenUsage)) (message, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	var out strings.Builder
+	var usage tokenUsage
 	calls := make(map[int]*toolCall)
 	finishReason := ""
 
@@ -1295,6 +1343,9 @@ func handleStream(body io.Reader, onChunk func(string)) (message, error) {
 
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			if onUsage != nil {
+				onUsage(usage)
+			}
 			msg := message{Role: "assistant", Content: out.String()}
 			if len(calls) > 0 {
 				if finishReason != "tool_calls" {
@@ -1319,6 +1370,9 @@ func handleStream(body io.Reader, onChunk func(string)) (message, error) {
 		var chunk streamResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return message{}, fmt.Errorf("decode stream chunk: %w", err)
+		}
+		if in, out := chunk.Usage.counts(); in != 0 || out != 0 {
+			usage = chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -1379,6 +1433,14 @@ func loadMemory(name string) ([]message, error) {
 }
 
 func saveMemory(name string, messages []message) error {
+	return saveMemoryArchive(name, messages, nil)
+}
+
+func saveMemoryWithUsage(name string, messages []message, usage sessionUsage) error {
+	return saveMemoryArchive(name, messages, &usage)
+}
+
+func saveMemoryArchive(name string, messages []message, usage *sessionUsage) error {
 	if err := validateMemoryName(name); err != nil {
 		return err
 	}
@@ -1396,6 +1458,9 @@ func saveMemory(name string, messages []message) error {
 		archive.CreatedAt = now
 	}
 	archive.Version, archive.UpdatedAt, archive.Messages = 1, now, messages
+	if usage != nil {
+		archive.Usage = *usage
+	}
 	data, err := json.MarshalIndent(archive, "", "  ")
 	if err != nil {
 		return err
@@ -1441,10 +1506,22 @@ func availableTools(cfg config) []tool {
 		},
 	}
 	tools = append(tools, memoryTools()...)
+	if !cfg.Subagent {
+		tools = append(tools, taskTool())
+	}
 	return append(tools, cfg.MCP.Tools()...)
 }
 
 func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
+	if len(calls) > 1 {
+		allTasks := true
+		for _, call := range calls {
+			allTasks = allTasks && call.Type == "function" && call.Function.Name == "task"
+		}
+		if allTasks {
+			return executeParallelTasks(calls, cfg)
+		}
+	}
 	toolMessages := make([]message, 0, len(calls))
 	for _, call := range calls {
 		if err := cfg.context().Err(); err != nil {
@@ -1463,6 +1540,8 @@ func executeToolCalls(calls []toolCall, cfg config) ([]message, error) {
 			cfg.Logger.Printf("tool name=%q args=%q started", call.Function.Name, call.Function.Arguments)
 		}
 		switch call.Function.Name {
+		case "task":
+			output, err = runTask(cfg, call)
 		case "memory_search", "memory_read":
 			output, err = callMemoryTool(cfg.context(), call.Function.Name, call.Function.Arguments)
 		case "bash":
